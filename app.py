@@ -88,11 +88,11 @@ def push_message(uid, text):
 # 🤖 AI（最強穩定版）
 def call_ai(messages, task="chat"):
     models = [
-        # 🥇 免費優先（最穩）
-        "mistralai/mistral-7b-instruct",
+        # 🥇 免費（一定可用）
+        "mistralai/mistral-7b-instruct:free",
 
         # 🥈 備用免費
-        "openai/gpt-3.5-turbo",
+        "openchat/openchat-3.5-0106:free",
 
         # 🥉 有錢才用
         "openai/gpt-4o-mini"
@@ -100,7 +100,7 @@ def call_ai(messages, task="chat"):
 
     for model in models:
         try:
-            print(f"嘗試模型: {model}")
+            print("嘗試模型:", model)
 
             response = client.chat.completions.create(
                 model=model,
@@ -108,16 +108,15 @@ def call_ai(messages, task="chat"):
                 max_tokens=300
             )
 
-            # ✅ 正常回傳內容
             content = response.choices[0].message.content
-            print(f"成功模型: {model}")
+            print("成功模型:", model)
             return content
 
         except Exception as e:
-            print(f"模型失敗: {model}", e)
+            print("模型失敗:", model, e)
 
-    # ❗ 全部失敗
     return "AI目前無法使用（模型全部失敗）"
+
 # 🌐 查詢
 def web_search(query):
     url = "https://api.duckduckgo.com/?q=" + urllib.parse.quote(query) + "&format=json"
