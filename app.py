@@ -246,12 +246,17 @@ threading.Thread(target=run_schedule).start()
 def webhook():
     try:
         data = request.json
+        print("完整資料:", data)  # 👈 超重要
+
         event = data['events'][0]
+
+        # ❗ 防呆（避免不是文字）
+        if 'message' not in event or 'text' not in event['message']:
+            return "OK"
 
         user_id = event['source']['userId']
         user_msg = event['message']['text']
         reply_token = event['replyToken']
-
         print("使用者:", user_msg)
 
         # 🧠 存記憶
