@@ -229,14 +229,18 @@ def morning():
 
         push_message(uid, msg)
 
+
 # 🔔 排程執行
 def run_schedule():
-    schedule.every(1).minutes.do(check_schedule)
-    schedule.every().day.at("05:00").do(morning)
-
     while True:
         schedule.run_pending()
         time.sleep(1)
+
+# ⏰ 行程提醒（每30秒檢查）
+schedule.every(30).seconds.do(check_schedule)
+
+# 🌅 每日早安
+schedule.every().day.at("05:00").do(morning)
 
 threading.Thread(target=run_schedule).start()
 
