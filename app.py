@@ -252,22 +252,26 @@ def webhook():
         user_msg = event['message']['text']
         reply_token = event['replyToken']
 
+        print("使用者:", user_msg)
+
         # 🧠 存記憶
         cursor.execute("INSERT INTO memory VALUES (?, ?, ?)", (user_id, "user", user_msg))
         conn.commit()
 
         # 💰 使用次數
         user_usage[user_id] = user_usage.get(user_id, 0) + 1
+
         if user_usage[user_id] > DAILY_LIMIT:
             ai_reply = "今日已達上限"
 
-        # 🎯 指令
+        # 🎯 目標設定
         elif user_msg.startswith("/目標"):
             _, g, t = user_msg.split()
             cursor.execute("INSERT INTO goals VALUES (?, ?, ?)", (user_id, g, t))
             conn.commit()
             ai_reply = "已設定目標"
 
+        # 📝 打卡
         elif user_msg.startswith("/打卡"):
             _, g, v = user_msg.split()
             cursor.execute("INSERT INTO goal_logs VALUES (?, ?, ?, ?)",
@@ -275,22 +279,23 @@ def webhook():
             conn.commit()
             ai_reply = "已記錄"
 
+        # 📊 進度分析
         elif user_msg == "/進度":
             rows = cursor.execute("SELECT * FROM goal_logs WHERE user_id=?", (user_id,)).fetchall()
-            res = call_ai([{"role": "user", "content": str(rows)}], "analysis")
-            ai_reply = res.choices[0].message.content
+            ai_reply = call_ai([{"role": "user", "content": str(rows)}])
 
+        # 🌐 查詢
         elif user_msg.startswith("/查"):
             q = user_msg.replace("/查", "")
             data = web_search(q)
-            res = call_ai([{"role": "user", "content": data}], "analysis")
-            ai_reply = res.choices[0].message.content
+            ai_reply = call_ai([{"role": "user", "content": data}])
 
+        # 📈 行程分析
         elif user_msg == "/分析":
             rows = cursor.execute("SELECT text FROM schedule WHERE user_id=?", (user_id,)).fetchall()
-            res = call_ai([{"role": "user", "content": str(rows)}], "analysis")
-            ai_reply = res.choices[0].message.content
+            ai_reply = call_ai([{"role": "user", "content": str(rows)}])
 
+        # 📅 新增行程（自然語言）
         elif any(x in user_msg for x in ["點", ":", "/", "月"]):
             parsed = parse_event(user_msg)
             if parsed:
@@ -299,30 +304,36 @@ def webhook():
                                (user_id, str(dt), user_msg, loc, rep))
                 conn.commit()
                 ai_reply = "已新增行程"
+            else:
+                ai_reply = "時間解析失敗"
 
+        # 🤖 一般聊天（最重要🔥）
         else:
-            res = call_ai([{"role": "user", "content": user_msg}])
-            ai_reply = res.choices[0].message.content
+            ai_reply = call_ai([{"role": "user", "content": user_msg}])
+
+        print("AI回覆:", ai_reply)
 
         # 🧠 存 AI 回覆
         cursor.execute("INSERT INTO memory VALUES (?, ?, ?)", (user_id, "assistant", ai_reply))
         conn.commit()
 
-        # 📩 回 LINE
+        # 📩 回 LINE（只能一次🔥）
         requests.post(
             "https://api.line.me/v2/bot/message/reply",
             headers={
                 "Authorization": f"Bearer {LINE_TOKEN}",
                 "Content-Type": "application/json"
             },
-            json={"replyToken": reply_token, "messages": [{"type": "text", "text": ai_reply}]}
+            json={
+                "replyToken": reply_token,
+                "messages": [{"type": "text", "text": ai_reply}]
+            }
         )
 
     except Exception as e:
-        print("錯誤:", e)
+        print("Webhook錯誤:", e)
 
     return "OK"
-
 # 🚀 啟動（雲端OK）
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
