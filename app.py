@@ -87,19 +87,18 @@ def push_message(uid, text):
 
 # 🤖 AI（最強穩定版）
 def call_ai(messages, task="chat"):
+    import os
+
+    print("API KEY:", os.getenv("OPENROUTER_API_KEY"))  # 👈 一定要加
+
     models = [
-        # 🥇 免費（一定可用）
         "mistralai/mistral-7b-instruct:free",
-
-        # 🥈 備用免費
         "openchat/openchat-3.5-0106:free",
-
-        # 🥉 有錢才用
         "openai/gpt-4o-mini"
     ]
 
     for model in models:
-        try:
+        try: 
             print("嘗試模型:", model)
 
             response = client.chat.completions.create(
@@ -113,7 +112,8 @@ def call_ai(messages, task="chat"):
             return content
 
         except Exception as e:
-            print("模型失敗:", model, e)
+            print("模型失敗:", model)
+            print("錯誤內容:", str(e))  # 👈 多印這行（超關鍵）
 
     return "AI目前無法使用（模型全部失敗）"
 
