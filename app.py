@@ -353,23 +353,24 @@ def webhook():
                 "SELECT summary FROM profile WHERE user_id=?",
                 (user_id,)
             ).fetchone()
-
+            
             old_summary = old[0] if old else ""
-
+            
             new_summary = call_ai([
-                {"role": "system", "content": "整理使用者的長期特徵（目標、習慣、狀態）"},
+                {"role": "system", "content": "用一句話記住這個人的特徵（目標、習慣）"},
                 {"role": "user", "content": old_summary + "\n" + user_msg}
             ])
+
+            print("新記憶:", new_summary)  # 👈 🔥 這行最重要
 
             cursor.execute(
                 "REPLACE INTO profile VALUES (?, ?)",
                 (user_id, new_summary)
             )
             conn.commit()
-
+                               
         except Exception as e:
-            print("記憶更新錯誤:", e)
-        
+            print("記憶更新錯誤:", e)        
         # 📩 回 LINE
         res = requests.post(
             "https://api.line.me/v2/bot/message/reply",
