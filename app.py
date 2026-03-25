@@ -53,7 +53,14 @@ CREATE TABLE IF NOT EXISTS memory (
     content TEXT
 )
 """)
-
+# 🧠 長期記憶（人格）
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS profile (
+    user_id TEXT PRIMARY KEY,
+    summary TEXT
+)
+""")
+conn.commit()
 # 🎯 目標
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS goals (
@@ -318,14 +325,43 @@ def webhook():
 
         # 🤖 一般聊天（最重要🔥）
         else:
-            ai_reply = call_ai([{"role": "user", "content": user_msg}])
+            # 🧠 讀長期記憶
+            profile = cursor.execute(
+                "SELECT summary FROM profile WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
 
-        print("AI回覆:", ai_reply)
+            profile_text = profile[0] if profile else ""
 
+            messages = [
+                {"role": "system", "content": f"你是一個有記憶的AI助理，這是使用者資料：{profile_text}"}
+            ]
+
+            messages.append({"role": "user", "content": user_msg})
+
+            ai_reply = call_ai(messages)
         # 🧠 存 AI 回覆
         cursor.execute("INSERT INTO memory VALUES (?, ?, ?)", (user_id, "assistant", ai_reply))
         conn.commit()
 
+        # 🧠 更新長期記憶
+        old = cursor.execute(
+            "SELECT summary FROM profile WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+
+        old_summary = old[0] if old else ""
+
+        new_summary = call_ai([
+            {"role": "system", "content": "整理使用者的長期特徵（目標、習慣、狀態）"},
+            {"role": "user", "content": old_summary + "\n" + user_msg}
+        ])
+
+        cursor.execute(
+            "REPLACE INTO profile VALUES (?, ?)",
+            (user_id, new_summary)
+        )
+        conn.commit()
         # 📩 回 LINE（只能一次🔥）
         requests.post(
             "https://api.line.me/v2/bot/message/reply",
