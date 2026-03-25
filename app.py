@@ -256,62 +256,57 @@ threading.Thread(target=run_schedule).start()
 @app.route("/webhook", methods=['POST'])
 def webhook():
     try:
+        import traceback
+        
         data = request.json
-        print("完整資料:", data)  # 👈 超重要
-
+        print("完整資料:", data)
+        
         event = data['events'][0]
 
-        # ❗ 防呆（避免不是文字）
         if 'message' not in event or 'text' not in event['message']:
             return "OK"
-
+                
         user_id = event['source']['userId']
         user_msg = event['message']['text']
         reply_token = event['replyToken']
         print("使用者:", user_msg)
-
-        # 🧠 存記憶
+        
+        # 🧠 存使用者記憶
         cursor.execute("INSERT INTO memory VALUES (?, ?, ?)", (user_id, "user", user_msg))
         conn.commit()
-
+    
         # 💰 使用次數
         user_usage[user_id] = user_usage.get(user_id, 0) + 1
-
+    
         if user_usage[user_id] > DAILY_LIMIT:
             ai_reply = "今日已達上限"
-
-        # 🎯 目標設定
+        
         elif user_msg.startswith("/目標"):
             _, g, t = user_msg.split()
             cursor.execute("INSERT INTO goals VALUES (?, ?, ?)", (user_id, g, t))
             conn.commit()
             ai_reply = "已設定目標"
-
-        # 📝 打卡
+        
         elif user_msg.startswith("/打卡"):
             _, g, v = user_msg.split()
             cursor.execute("INSERT INTO goal_logs VALUES (?, ?, ?, ?)",
                            (user_id, g, v, str(datetime.datetime.now())))
             conn.commit()
             ai_reply = "已記錄"
-
-        # 📊 進度分析
+    
         elif user_msg == "/進度":
             rows = cursor.execute("SELECT * FROM goal_logs WHERE user_id=?", (user_id,)).fetchall()
             ai_reply = call_ai([{"role": "user", "content": str(rows)}])
 
-        # 🌐 查詢
         elif user_msg.startswith("/查"):
             q = user_msg.replace("/查", "")
             data = web_search(q)
             ai_reply = call_ai([{"role": "user", "content": data}])
-
-        # 📈 行程分析
+        
         elif user_msg == "/分析":
             rows = cursor.execute("SELECT text FROM schedule WHERE user_id=?", (user_id,)).fetchall()
             ai_reply = call_ai([{"role": "user", "content": str(rows)}])
-
-        # 📅 新增行程（自然語言）
+        
         elif any(x in user_msg for x in ["點", ":", "/", "月"]):
             parsed = parse_event(user_msg)
             if parsed:
@@ -322,30 +317,61 @@ def webhook():
                 ai_reply = "已新增行程"
             else:
                 ai_reply = "時間解析失敗"
-
-        # 🤖 一般聊天（最重要🔥）
+        
         else:
-            # 🧠 讀長期記憶
-            profile = cursor.execute(
+            # 🧠 讀長期記憶（安全版）
+            try:
+                profile = cursor.execute(
+                    "SELECT summary FROM profile WHERE user_id=?",
+                    (user_id,)
+                ).fetchone()
+                profile_text = profile[0] if profile else ""
+            except Exception as e:
+                print("讀取profile錯誤:", e)
+                profile_text = ""
+
+            messages = [
+                {"role": "system", "content": f"你是一個有記憶的AI助理，這是使用者資料：{profile_text}"},
+                {"role": "user", "content": user_msg}
+            ]
+
+            try:
+                ai_reply = call_ai(messages)
+            except Exception as e:
+                print("AI錯誤:", e)
+                ai_reply = "AI暫時無法使用"
+        
+        print("AI回覆:", ai_reply)
+
+        # 🧠 存 AI 回覆
+        cursor.execute("INSERT INTO memory VALUES (?, ?, ?)", (user_id, "assistant", ai_reply))
+        conn.commit()
+        
+        # 🧠 更新長期記憶（安全版🔥）
+        try:
+            old = cursor.execute(
                 "SELECT summary FROM profile WHERE user_id=?",
                 (user_id,)
             ).fetchone()
 
-            profile_text = profile[0] if profile else ""
+            old_summary = old[0] if old else ""
 
-            messages = [
-                {"role": "system", "content": f"你是一個有記憶的AI助理，這是使用者資料：{profile_text}"}
-            ]
+            new_summary = call_ai([
+                {"role": "system", "content": "整理使用者的長期特徵（目標、習慣、狀態）"},
+                {"role": "user", "content": old_summary + "\n" + user_msg}
+            ])
 
-            messages.append({"role": "user", "content": user_msg})
+            cursor.execute(
+                "REPLACE INTO profile VALUES (?, ?)",
+                (user_id, new_summary)
+            )
+            conn.commit()
 
-            ai_reply = call_ai(messages)
-        # 🧠 存 AI 回覆
-        cursor.execute("INSERT INTO memory VALUES (?, ?, ?)", (user_id, "assistant", ai_reply))
-        conn.commit()
-
-        # 📩 回 LINE（只能一次🔥）
-        requests.post(
+        except Exception as e:
+            print("記憶更新錯誤:", e)
+        
+        # 📩 回 LINE
+        res = requests.post(
             "https://api.line.me/v2/bot/message/reply",
             headers={
                 "Authorization": f"Bearer {LINE_TOKEN}",
@@ -357,11 +383,13 @@ def webhook():
             }
         )
 
+        print("LINE回應:", res.status_code, res.text)
+            
     except Exception as e:
         print("Webhook錯誤:")
         traceback.print_exc()
-    return "OK"
 
+    return "OK"
 # 🚀 啟動（雲端OK）
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
