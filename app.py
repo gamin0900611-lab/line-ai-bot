@@ -9,6 +9,7 @@ import threading
 import urllib.parse
 import re
 import os
+import traceback
 
 app = Flask(__name__)
 
@@ -339,9 +340,10 @@ def webhook():
         )
 
     except Exception as e:
-        print("Webhook錯誤:", e)
-
+        print("Webhook錯誤:")
+        traceback.print_exc()
     return "OK"
+
 # 🚀 啟動（雲端OK）
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
