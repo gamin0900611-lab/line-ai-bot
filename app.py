@@ -85,27 +85,39 @@ def push_message(uid, text):
         json={"to": uid, "messages": [{"type": "text", "text": text}]}
     )
 
-# 🤖 AI（最強模型系統）
+# 🤖 AI（最強穩定版）
 def call_ai(messages, task="chat"):
     models = [
-        "openai/gpt-4o-mini",
-        "mistralai/mistral-7b-instruct:free"
+        # 🥇 免費優先（最穩）
+        "mistralai/mistral-7b-instruct",
+
+        # 🥈 備用免費
+        "openai/gpt-3.5-turbo",
+
+        # 🥉 有錢才用
+        "openai/gpt-4o-mini"
     ]
 
     for model in models:
         try:
-            return client.chat.completions.create(
+            print(f"嘗試模型: {model}")
+
+            response = client.chat.completions.create(
                 model=model,
                 messages=messages,
                 max_tokens=300
             )
+
+            # ✅ 正常回傳內容
+            content = response.choices[0].message.content
+            print(f"成功模型: {model}")
+            return content
+
         except Exception as e:
-            print("模型錯誤:", model, e)
+            print(f"模型失敗: {model}", e)
 
-    return type("obj", (), {
-        "choices": [type("obj", (), {"message": type("obj", (), {"content": "AI暫時無法使用"})})]
-    })
-
+    # ❗ 全部失敗
+    return "AI目前無法使用（模型全部失敗）"
 # 🌐 查詢
 def web_search(query):
     url = "https://api.duckduckgo.com/?q=" + urllib.parse.quote(query) + "&format=json"
