@@ -1,1514 +1,660 @@
 # ==========================================
-# AI LINE Assistant Ultimate Version
-# Part 1 / 6
-# Core System + Config + Database
+# LINE AI ASSISTANT SYSTEM
+# Core System
 # ==========================================
 
-import os
-import json
+from flask import Flask, request
 import requests
 import sqlite3
 import datetime
-import pytz
+import os
 import threading
 import time
-from flask import Flask, request, abort
+import traceback
+import pytz
+import re
+import schedule
+import urllib.parse
+
+from openai import OpenAI
+
 
 # ==========================================
 # 基本設定
 # ==========================================
 
-APP_NAME = "AI Life Assistant"
-
-TIMEZONE = "Asia/Taipei"
-
-DAILY_LIMIT = 500
-
-MORNING_REPORT_TIME = "05:00"
-
-MODEL_PRIMARY = "openai/gpt-4o-mini"
-
-MODEL_FALLBACK = "mistralai/mistral-7b-instruct"
-
-DATABASE = "database.db"
-
-# ==========================================
-# Flask
-# ==========================================
-
 app = Flask(__name__)
 
-# ==========================================
-# Environment
-# ==========================================
+# Render port
+PORT = int(os.environ.get("PORT", 10000))
 
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("1O2oOqz3rG5OkdVT2OSSQN3FyJuiFeX53iCp2UB3PbgEO93ZMlNDxRsgmcmraqmbxvj5K/x1w/HTP5a+3bVl0VIJmrKJlp5kIUKl7yylpyXzmiXpnBwumrSwYMOAs75nTY3yny5YkGD5rcmfjZRNaQdB04t89/1O/w1cDnyilFU=")
-LINE_CHANNEL_SECRET = os.getenv("3892ffd574c24befd128c97fc20323d4")
-OPENROUTER_API_KEY = os.getenv("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")
-
-# ==========================================
-# Headers
-# ==========================================
-
-HEADERS = {
-    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-    "Content-Type": "application/json"
-}
-
-# ==========================================
 # 時區
-# ==========================================
+tz = pytz.timezone("Asia/Taipei")
 
-tz = pytz.timezone(TIMEZONE)
+# API KEY
+LINE_TOKEN = os.environ.get("1O2oOqz3rG5OkdVT2OSSQN3FyJuiFeX53iCp2UB3PbgEO93ZMlNDxRsgmcmraqmbxvj5K/x1w/HTP5a+3bVl0VIJmrKJlp5kIUKl7yylpyXzmiXpnBwumrSwYMOAs75nTY3yny5YkGD5rcmfjZRNaQdB04t89/1O/w1cDnyilFU=")
+OPENROUTER_API_KEY = os.environ.get("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")
 
-# ==========================================
-# Database 初始化
-# ==========================================
+# OpenRouter
+client = OpenAI(
+    api_key=OPENROUTER_API_KEY,
+    base_url="https://openrouter.ai/api/v1"
+)
 
-def init_db():
+# AI模型
+AI_MODEL = "openai/gpt-4o-mini"
 
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
+# 每日使用上限
+DAILY_LIMIT = 500
 
-    # 使用者長期記憶
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS profile (
-        user_id TEXT PRIMARY KEY,
-        summary TEXT
-    )
-    """)
+# 使用紀錄
+user_usage = {}
 
-    # 對話紀錄
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS chat_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        role TEXT,
-        content TEXT,
-        timestamp TEXT
-    )
-    """)
-
-    # 行程
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        title TEXT,
-        start_time TEXT
-    )
-    """)
-
-    # 記帳
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS expenses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        amount INTEGER,
-        category TEXT,
-        note TEXT,
-        time TEXT
-    )
-    """)
-
-    # 使用次數限制
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS usage (
-        user_id TEXT,
-        date TEXT,
-        count INTEGER
-    )
-    """)
-
-    # 目標
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS goals (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT,
-        goal TEXT,
-        created TEXT
-    )
-    """)
-
-    conn.commit()
-    conn.close()
-
-init_db()
 
 # ==========================================
-# DB Helper
+# 資料庫
 # ==========================================
 
-def get_conn():
-    return sqlite3.connect(DATABASE)
+conn = sqlite3.connect("data.db", check_same_thread=False)
+cursor = conn.cursor()
+
+# 對話記憶
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS memory (
+    user_id TEXT,
+    role TEXT,
+    content TEXT,
+    time TEXT
+)
+""")
+
+# 長期記憶
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS profile (
+    user_id TEXT PRIMARY KEY,
+    summary TEXT
+)
+""")
+
+# 行程
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS schedule (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT,
+    time TEXT,
+    text TEXT,
+    location TEXT,
+    repeat_type TEXT
+)
+""")
+
+# 目標
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS goals (
+    user_id TEXT,
+    goal TEXT,
+    target TEXT
+)
+""")
+
+# 打卡
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS goal_logs (
+    user_id TEXT,
+    goal TEXT,
+    value TEXT,
+    time TEXT
+)
+""")
+
+# 花費
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS expenses (
+    user_id TEXT,
+    amount REAL,
+    category TEXT,
+    note TEXT,
+    time TEXT
+)
+""")
+
+conn.commit()
+
 
 # ==========================================
-# 現在時間
+# AI人格
 # ==========================================
 
-def now():
+SYSTEM_PROMPT = """
+你是一個個人AI助理。
 
-    return datetime.datetime.now(tz)
+功能：
+1. 管理行程
+2. 記住使用者習慣
+3. 財務分析
+4. 目標追蹤
+5. 每日與每週報告
 
-# ==========================================
-# 今日日期
-# ==========================================
+規則：
+- 使用繁體中文
+- 回覆清晰簡短
+- 若有行程或金錢資料要分析
+"""
 
-def today():
 
-    return now().strftime("%Y-%m-%d")
-
-# ==========================================
-# 現在時間字串
-# ==========================================
-
-def now_str():
-
-    return now().strftime("%Y-%m-%d %H:%M:%S")
 
 # ==========================================
-# 使用限制檢查
+# AI呼叫
 # ==========================================
 
-def check_usage(user_id):
+def call_ai(messages):
 
-    conn = get_conn()
-    cursor = conn.cursor()
+    now = datetime.datetime.now(tz)
 
-    cursor.execute(
-        "SELECT count FROM usage WHERE user_id=? AND date=?",
-        (user_id, today())
-    )
+    system_time = f"""
+現在時間：{now}
+時區：Asia/Taipei
+"""
 
-    row = cursor.fetchone()
-
-    if row:
-
-        if row[0] >= DAILY_LIMIT:
-
-            conn.close()
-            return False
-
-        cursor.execute(
-            "UPDATE usage SET count=count+1 WHERE user_id=? AND date=?",
-            (user_id, today())
-        )
-
-    else:
-
-        cursor.execute(
-            "INSERT INTO usage VALUES (?, ?, 1)",
-            (user_id, today())
-        )
-
-    conn.commit()
-    conn.close()
-
-    return True
-
-# ==========================================
-# 呼叫 AI
-# ==========================================
-
-def call_ai(messages, model=MODEL_PRIMARY):
-
-    url = "https://openrouter.ai/api/v1/chat/completions"
-
-    data = {
-        "model": model,
-        "messages": messages
-    }
+    full_messages = [
+        {"role": "system", "content": SYSTEM_PROMPT + system_time}
+    ] + messages
 
     try:
 
-        r = requests.post(
-            url,
-            headers=HEADERS,
-            json=data,
-            timeout=30
+        response = client.chat.completions.create(
+            model=AI_MODEL,
+            messages=full_messages,
+            max_tokens=500
         )
 
-        res = r.json()
-
-        return res["choices"][0]["message"]["content"]
+        return response.choices[0].message.content
 
     except Exception as e:
 
-        print("AI錯誤:", e)
-
-        if model != MODEL_FALLBACK:
-
-            return call_ai(messages, MODEL_FALLBACK)
+        print("AI錯誤", e)
 
         return "AI暫時無法回應"
 
-# ==========================================
-# LINE Reply
-# ==========================================
-
-def line_reply(reply_token, text):
-
-    url = "https://api.line.me/v2/bot/message/reply"
-
-    headers = {
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "replyToken": reply_token,
-        "messages": [
-            {
-                "type": "text",
-                "text": text
-            }
-        ]
-    }
-
-    requests.post(url, headers=headers, json=data)
-
-# ==========================================
-# LINE Push
-# ==========================================
-
-def line_push(user_id, text):
-
-    url = "https://api.line.me/v2/bot/message/push"
-
-    headers = {
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "to": user_id,
-        "messages": [
-            {
-                "type": "text",
-                "text": text
-            }
-        ]
-    }
-
-    requests.post(url, headers=headers, json=data)
-
-# ==========================================
-# 儲存對話
-# ==========================================
-
-def save_chat(user_id, role, content):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "INSERT INTO chat_history (user_id,role,content,timestamp) VALUES (?,?,?,?)",
-        (user_id, role, content, now_str())
-    )
-
-    conn.commit()
-    conn.close()
-
-# ==========================================
-# 讀取歷史
-# ==========================================
-
-def load_history(user_id, limit=10):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT role,content FROM chat_history WHERE user_id=? ORDER BY id DESC LIMIT ?",
-        (user_id, limit)
-    )
-
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    rows.reverse()
-
-    messages = []
-
-    for r in rows:
-
-        messages.append({
-            "role": r[0],
-            "content": r[1]
-        })
-
-    return messages
-
-# ==========================================
-# 讀長期記憶
-# ==========================================
-
-def load_profile(user_id):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT summary FROM profile WHERE user_id=?",
-        (user_id,)
-    )
-
-    row = cursor.fetchone()
-
-    conn.close()
-
-    return row[0] if row else ""
-
-# ==========================================
-# 更新長期記憶
-# ==========================================
-
-def update_profile(user_id, user_msg):
-
-    try:
-
-        conn = get_conn()
-        cursor = conn.cursor()
-
-        cursor.execute(
-            "SELECT summary FROM profile WHERE user_id=?",
-            (user_id,)
-        )
-
-        old = cursor.fetchone()
-
-        old_summary = old[0] if old else ""
-
-        new_summary = call_ai([
-            {"role": "system", "content": "整理使用者長期特徵（習慣、目標、人格）"},
-            {"role": "user", "content": old_summary + "\n" + user_msg}
-        ])
-
-        cursor.execute(
-            "REPLACE INTO profile VALUES (?,?)",
-            (user_id, new_summary)
-        )
-
-        conn.commit()
-        conn.close()
-
-    except Exception as e:
-
-        print("記憶更新失敗:", e)
-
-# ==========================================
-# AI 人格
-# ==========================================
-
-AI_PERSONA = """
-你是一個超級個人AI助理。
-
-你的任務：
-
-1 幫助使用者管理人生
-2 管理行程
-3 管理金錢
-4 記住習慣
-5 分析生活
-
-回覆原則：
-
-- 使用繁體中文
-- 回答清楚
-- 盡量簡潔
-"""
-
-# ==========================================
-# 解析記帳
-# ==========================================
-
-def parse_expense(text):
-
-    if text.startswith("記帳"):
-
-        parts = text.split()
-
-        if len(parts) >= 2:
-
-            amount = int(parts[1])
-
-            note = " ".join(parts[2:]) if len(parts) > 2 else ""
-
-            return amount, note
-
-    return None# 
-# ==========================================
-# 中文時間解析
-# ==========================================
-
-def parse_time(text):
-
-    now_time = now()
-
-    try:
-
-        if "明天" in text:
-
-            date = now_time + datetime.timedelta(days=1)
-
-        elif "後天" in text:
-
-            date = now_time + datetime.timedelta(days=2)
-
-        elif "今天" in text:
-
-            date = now_time
-
-        else:
-
-            date = now_time
-
-        hour = None
-        minute = 0
-
-        if "點" in text:
-
-            t = text.split("點")[0]
-            nums = ''.join(filter(str.isdigit, t))
-
-            if nums:
-
-                hour = int(nums)
-
-        if ":" in text:
-
-            part = text.split(":")
-            hour = int(part[0][-2:])
-            minute = int(part[1][:2])
-
-        if hour is None:
-
-            return None
-
-        event_time = datetime.datetime(
-            date.year,
-            date.month,
-            date.day,
-            hour,
-            minute,
-            tzinfo=tz
-        )
-
-        return event_time
-
-    except Exception as e:
-
-        print("時間解析錯誤:", e)
-
-        return None
-
-
-# ==========================================
-# 新增行程
-# ==========================================
-
-def add_event(user_id, title, time):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "INSERT INTO events (user_id,title,start_time) VALUES (?,?,?)",
-        (user_id, title, time.strftime("%Y-%m-%d %H:%M:%S"))
-    )
-
-    conn.commit()
-    conn.close()
-
-
-# ==========================================
-# 今日行程
-# ==========================================
-
-def get_today_events(user_id):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    start = today() + " 00:00:00"
-    end = today() + " 23:59:59"
-
-    cursor.execute(
-        """
-        SELECT title,start_time
-        FROM events
-        WHERE user_id=? AND start_time BETWEEN ? AND ?
-        ORDER BY start_time
-        """,
-        (user_id, start, end)
-    )
-
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    if not rows:
-
-        return "今天沒有行程"
-
-    msg = "📅 今日行程\n\n"
-
-    for r in rows:
-
-        msg += f"{r[1][11:16]} {r[0]}\n"
-
-    return msg
-
-
-# ==========================================
-# 週末行程
-# ==========================================
-
-def get_weekend_events(user_id):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    now_time = now()
-
-    saturday = now_time + datetime.timedelta((5-now_time.weekday())%7)
-    sunday = saturday + datetime.timedelta(days=1)
-
-    start = saturday.strftime("%Y-%m-%d") + " 00:00:00"
-    end = sunday.strftime("%Y-%m-%d") + " 23:59:59"
-
-    cursor.execute(
-        """
-        SELECT title,start_time
-        FROM events
-        WHERE user_id=? AND start_time BETWEEN ? AND ?
-        ORDER BY start_time
-        """,
-        (user_id, start, end)
-    )
-
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    if not rows:
-
-        return "週末沒有行程"
-
-    msg = "📅 週末行程\n\n"
-
-    for r in rows:
-
-        msg += f"{r[1]} {r[0]}\n"
-
-    return msg
-
-
-# ==========================================
-# 儲存記帳
-# ==========================================
-
-def save_expense(user_id, amount, note):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        INSERT INTO expenses
-        (user_id,amount,category,note,time)
-        VALUES (?,?,?,?,?)
-        """,
-        (user_id, amount, "general", note, now_str())
-    )
-
-    conn.commit()
-    conn.close()
-
-
-# ==========================================
-# 今日花費
-# ==========================================
-
-def today_expense(user_id):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    start = today() + " 00:00:00"
-    end = today() + " 23:59:59"
-
-    cursor.execute(
-        """
-        SELECT amount,note
-        FROM expenses
-        WHERE user_id=? AND time BETWEEN ? AND ?
-        """,
-        (user_id, start, end)
-    )
-
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    if not rows:
-
-        return "今天沒有花費"
-
-    total = 0
-
-    msg = "💰 今日花費\n\n"
-
-    for r in rows:
-
-        total += r[0]
-        msg += f"{r[0]} 元 {r[1]}\n"
-
-    msg += f"\n合計：{total} 元"
-
-    return msg
-
-
-# ==========================================
-# 財務分析
-# ==========================================
-
-def finance_analysis(user_id):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT amount,note FROM expenses WHERE user_id=? ORDER BY id DESC LIMIT 50",
-        (user_id,)
-    )
-
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    if not rows:
-
-        return "沒有財務資料"
-
-    text = ""
-
-    for r in rows:
-
-        text += f"{r[0]} {r[1]}\n"
-
-    result = call_ai([
-        {
-            "role": "system",
-            "content": "分析使用者的消費習慣"
-        },
-        {
-            "role": "user",
-            "content": text
-        }
-    ])
-
-    return result
-
-
-# ==========================================
-# 每週報告
-# ==========================================
-
-def weekly_report(user_id):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT amount FROM expenses WHERE user_id=?",
-        (user_id,)
-    )
-
-    rows = cursor.fetchall()
-
-    total = sum([r[0] for r in rows]) if rows else 0
-
-    cursor.execute(
-        "SELECT COUNT(*) FROM events WHERE user_id=?",
-        (user_id,)
-    )
-
-    events = cursor.fetchone()[0]
-
-    conn.close()
-
-    report = f"""
-📊 每週生活報告
-
-行程數量：{events}
-總花費：{total} 元
-"""
-
-    return report# 
-# ==========================================
-# 讀取長期記憶
-# ==========================================
-
-def get_profile(user_id):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    try:
-
-        cursor.execute(
-            "SELECT summary FROM profile WHERE user_id=?",
-            (user_id,)
-        )
-
-        row = cursor.fetchone()
-
-        if row:
-            return row[0]
-
-        return ""
-
-    except:
-
-        return ""
-
-    finally:
-
-        conn.close()
-
-
-# ==========================================
-# 更新長期記憶
-# ==========================================
-
-def update_profile(user_id, user_msg):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    try:
-
-        cursor.execute(
-            "SELECT summary FROM profile WHERE user_id=?",
-            (user_id,)
-        )
-
-        old = cursor.fetchone()
-
-        old_summary = old[0] if old else ""
-
-        new_summary = call_ai([
-            {
-                "role": "system",
-                "content": "整理使用者長期特徵，例如習慣、目標、生活模式"
-            },
-            {
-                "role": "user",
-                "content": old_summary + "\n" + user_msg
-            }
-        ])
-
-        cursor.execute(
-            "REPLACE INTO profile VALUES (?,?)",
-            (user_id, new_summary)
-        )
-
-        conn.commit()
-
-    except Exception as e:
-
-        print("記憶更新錯誤:", e)
-
-    finally:
-
-        conn.close()
-
-
-# ==========================================
-# 取得最近對話
-# ==========================================
-
-def get_recent_memory(user_id):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        SELECT role,content
-        FROM memory
-        WHERE user_id=?
-        ORDER BY id DESC
-        LIMIT 10
-        """,
-        (user_id,)
-    )
-
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    rows.reverse()
-
-    messages = []
-
-    for r in rows:
-
-        messages.append(
-            {
-                "role": r[0],
-                "content": r[1]
-            }
-        )
-
-    return messages
-
-
-# ==========================================
-# 儲存對話
-# ==========================================
-
-def save_memory(user_id, role, text):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        INSERT INTO memory
-        (user_id,role,content)
-        VALUES (?,?,?)
-        """,
-        (user_id, role, text)
-    )
-
-    conn.commit()
-    conn.close()
-
-
-# ==========================================
-# AI 聊天
-# ==========================================
-
-def ai_chat(user_id, user_msg):
-
-    profile = get_profile(user_id)
-
-    history = get_recent_memory(user_id)
-
-    messages = [
-        {
-            "role": "system",
-            "content":
-            f"""
-你是一個個人AI助理。
-
-現在時間：
-{now_str()}
-
-使用者長期資料：
-{profile}
-
-任務：
-1 回答問題
-2 協助規劃生活
-3 管理行程
-4 分析金錢
-5 幫助效率
-"""
-        }
-    ]
-
-    messages += history
-
-    messages.append(
-        {
-            "role": "user",
-            "content": user_msg
-        }
-    )
-
-    reply = call_ai(messages)
-
-    return reply
-
-
-# ==========================================
-# 指令解析
-# ==========================================
-
-def handle_command(user_id, text):
-
-    if text.startswith("/記帳"):
-
-        parts = text.split()
-
-        if len(parts) >= 2:
-
-            amount = int(parts[1])
-
-            note = " ".join(parts[2:]) if len(parts) > 2 else ""
-
-            save_expense(user_id, amount, note)
-
-            return "已記錄花費"
-
-    if text == "/今日花費":
-
-        return today_expense(user_id)
-
-    if text == "/財務分析":
-
-        return finance_analysis(user_id)
-
-    if text == "/今日行程":
-
-        return get_today_events(user_id)
-
-    if text == "/週末行程":
-
-        return get_weekend_events(user_id)
-
-    if text == "/週報":
-
-        return weekly_report(user_id)
-
-    return None
-
-
-# ==========================================
-# AI 行程理解
-# ==========================================
-
-def ai_understand_event(user_id, text):
-
-    prompt = f"""
-判斷這句話是不是行程：
-
-{text}
-
-如果是，回覆：
-EVENT:標題|時間
-
-如果不是
-NONE
-"""
-
-    result = call_ai([
-        {"role": "user", "content": prompt}
-    ])
-
-    if "EVENT:" not in result:
-
-        return None
-
-    try:
-
-        data = result.split("EVENT:")[1]
-
-        title, time_text = data.split("|")
-
-        event_time = parse_time(time_text)
-
-        if event_time:
-
-            add_event(user_id, title, event_time)
-
-            return "已新增行程"
-
-    except:
-
-        pass
-
-    return None
 
 
 # ==========================================
 # LINE 回覆
 # ==========================================
 
-def reply_line(reply_token, text):
+def reply_message(token, text):
 
-    requests.post(
-        "https://api.line.me/v2/bot/message/reply",
-        headers={
-            "Authorization": f"Bearer {LINE_TOKEN}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "replyToken": reply_token,
-            "messages": [
-                {
-                    "type": "text",
-                    "text": text
-                }
-            ]
-        }
-    )
+    headers = {
+        "Authorization": f"Bearer {LINE_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
-
-# ==========================================
-# LINE Webhook
-# ==========================================
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
+    data = {
+        "replyToken": token,
+        "messages": [
+            {
+                "type": "text",
+                "text": text
+            }
+        ]
+    }
 
     try:
 
-        data = request.json
-
-        event = data["events"][0]
-
-        if "message" not in event:
-
-            return "OK"
-
-        if "text" not in event["message"]:
-
-            return "OK"
-
-        user_id = event["source"]["userId"]
-
-        user_msg = event["message"]["text"]
-
-        reply_token = event["replyToken"]
-
-        print("User:", user_msg)
-
-        # 存使用者訊息
-        save_memory(user_id, "user", user_msg)
-
-        # 指令系統
-        cmd = handle_command(user_id, user_msg)
-
-        if cmd:
-
-            reply = cmd
-
-        else:
-
-            # AI 行程理解
-            event_result = ai_understand_event(user_id, user_msg)
-
-            if event_result:
-
-                reply = event_result
-
-            else:
-
-                reply = ai_chat(user_id, user_msg)
-
-        # 存AI回覆
-        save_memory(user_id, "assistant", reply)
-
-        # 更新長期記憶
-        update_profile(user_id, user_msg)
-
-        reply_line(reply_token, reply)
+        requests.post(
+            "https://api.line.me/v2/bot/message/reply",
+            headers=headers,
+            json=data
+        )
 
     except Exception as e:
 
-        print("Webhook錯誤:", e)
+        print("LINE錯誤", e)
 
-    return "OK"# 
-# ==========================================
-# 使用次數限制
-# ==========================================
-
-DAILY_LIMIT = 500
-
-user_usage = {}
-
-def check_usage(user_id):
-
-    if user_id not in user_usage:
-        user_usage[user_id] = 0
-
-    user_usage[user_id] += 1
-
-    if user_usage[user_id] > DAILY_LIMIT:
-        return False
-
-    return True
 
 
 # ==========================================
-# AI 模型 fallback
+# LINE 推播
 # ==========================================
 
-AI_MODELS = [
-    "openai/gpt-4o-mini",
-    "mistralai/mistral-7b-instruct",
-    "google/gemma-7b-it"
-]
+def push_message(uid, text):
 
-current_model_index = 0
+    headers = {
+        "Authorization": f"Bearer {LINE_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
-
-def call_ai_safe(messages):
-
-    global current_model_index
-
-    for i in range(len(AI_MODELS)):
-
-        model = AI_MODELS[current_model_index]
-
-        try:
-
-            headers = {
-                "Authorization": f"Bearer {OPENROUTER_KEY}",
-                "Content-Type": "application/json"
+    data = {
+        "to": uid,
+        "messages": [
+            {
+                "type": "text",
+                "text": text
             }
+        ]
+    }
 
-            payload = {
-                "model": model,
-                "messages": messages
-            }
+    try:
 
-            r = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=20
-            )
+        requests.post(
+            "https://api.line.me/v2/bot/message/push",
+            headers=headers,
+            json=data
+        )
 
-            data = r.json()
+    except Exception as e:
 
-            reply = data["choices"][0]["message"]["content"]
+        print("push錯誤", e)
 
-            return reply
-
-        except Exception as e:
-
-            print("模型錯誤:", model)
-
-            current_model_index += 1
-
-            if current_model_index >= len(AI_MODELS):
-                current_model_index = 0
-
-    return "AI暫時忙碌"
 
 
 # ==========================================
-# 覆蓋原本 call_ai
+# Web搜尋
 # ==========================================
 
-def call_ai(messages):
+def web_search(query):
 
-    return call_ai_safe(messages)
+    url = "https://api.duckduckgo.com/?q=" + urllib.parse.quote(query) + "&format=json"
 
+    try:
 
-# ==========================================
-# 每日使用量重置
-# ==========================================
+        res = requests.get(url).json()
 
-def reset_usage():
+        if res.get("AbstractText"):
+            return res["AbstractText"]
 
-    global user_usage
+        for t in res.get("RelatedTopics", []):
 
-    user_usage = {}
+            if "Text" in t:
+                return t["Text"]
 
-    print("每日使用量已重置")
+    except:
+        pass
 
+    return "查不到資料"
 
-# ==========================================
-# 每日生活分析
-# ==========================================
-
-def daily_life_analysis(user_id):
-
-    conn = get_conn()
-
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        SELECT role,content
-        FROM memory
-        WHERE user_id=?
-        ORDER BY id DESC
-        LIMIT 30
-        """,
-        (user_id,)
-    )
-
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    text = "\n".join([r[1] for r in rows])
-
-    prompt = f"""
-分析這個人的今天：
-
-{text}
-
-請回覆：
-
-1 今日重點
-2 建議改善
-3 明日建議
-"""
-
-    result = call_ai([
-        {"role": "user", "content": prompt}
-    ])
-
-    return result
 
 
 # ==========================================
-# 取得今日全部行程
+# 取得今天行程
 # ==========================================
 
-def get_today_all_events():
-
-    conn = get_conn()
-    cursor = conn.cursor()
+def get_today_events(user_id):
 
     today = datetime.date.today()
 
+    rows = cursor.execute(
+        "SELECT time,text FROM schedule WHERE user_id=?",
+        (user_id,)
+    ).fetchall()
+
+    events = []
+
+    for t, text in rows:
+
+        dt = datetime.datetime.fromisoformat(t)
+
+        if dt.date() == today:
+
+            events.append(
+                f"{dt.strftime('%H:%M')} {text}"
+            )
+
+    return events
+
+# ==========================================
+# 中文時間解析
+# ==========================================
+
+def parse_event_time(text):
+
+    now = datetime.datetime.now(tz)
+
+    year = now.year
+    month = now.month
+    day = now.day
+    hour = None
+    minute = 0
+
+    repeat_type = "none"
+    location = ""
+
+    # 明天
+    if "明天" in text:
+        dt = now + datetime.timedelta(days=1)
+        year, month, day = dt.year, dt.month, dt.day
+
+    # 後天
+    if "後天" in text:
+        dt = now + datetime.timedelta(days=2)
+        year, month, day = dt.year, dt.month, dt.day
+
+    # 週末
+    if "週末" in text or "周末" in text:
+
+        weekday = now.weekday()
+
+        days_to_sat = 5 - weekday
+
+        if days_to_sat < 0:
+            days_to_sat += 7
+
+        dt = now + datetime.timedelta(days=days_to_sat)
+
+        year, month, day = dt.year, dt.month, dt.day
+
+    # 每天
+    if "每天" in text:
+        repeat_type = "daily"
+
+    # 每週
+    if "每週" in text or "每周" in text:
+        repeat_type = "weekly"
+
+    # 解析日期
+    m = re.search(r"(\d{1,2})/(\d{1,2})", text)
+
+    if m:
+
+        month = int(m.group(1))
+        day = int(m.group(2))
+
+    # 解析時間 10:30
+    m = re.search(r"(\d{1,2}):(\d{1,2})", text)
+
+    if m:
+
+        hour = int(m.group(1))
+        minute = int(m.group(2))
+
+    # 解析時間 10點
+    m = re.search(r"(\d{1,2})點(\d{1,2})?", text)
+
+    if m:
+
+        hour = int(m.group(1))
+
+        if m.group(2):
+            minute = int(m.group(2))
+
+    if hour is None:
+        return None
+
+    dt = datetime.datetime(year, month, day, hour, minute)
+
+    dt = tz.localize(dt)
+
+    # 若時間已過
+    if dt < now:
+        dt += datetime.timedelta(days=1)
+
+    # 地點
+    if "在" in text:
+        location = text.split("在")[-1]
+
+    return dt, location, repeat_type
+
+
+
+# ==========================================
+# 新增行程
+# ==========================================
+
+def add_event(user_id, text):
+
+    parsed = parse_event_time(text)
+
+    if not parsed:
+        return "時間解析失敗"
+
+    dt, loc, rep = parsed
+
     cursor.execute(
-        """
-        SELECT user_id,title,time
-        FROM schedule
-        """
+        "INSERT INTO schedule VALUES (NULL,?,?,?,?,?)",
+        (user_id, dt.isoformat(), text, loc, rep)
     )
 
-    rows = cursor.fetchall()
+    conn.commit()
 
-    conn.close()
+    return f"已新增行程\n{dt.strftime('%m/%d %H:%M')}"
 
-    result = []
-
-    for r in rows:
-
-        t = datetime.datetime.fromisoformat(r[2])
-
-        if t.date() == today:
-
-            result.append(r)
-
-    return result
 
 
 # ==========================================
 # 行程提醒
 # ==========================================
 
-def event_reminder():
+notified = set()
 
-    events = get_today_all_events()
+def check_schedule():
 
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(tz)
 
-    for user_id, title, time_str in events:
+    rows = cursor.execute(
+        "SELECT id,user_id,time,text,repeat_type FROM schedule"
+    ).fetchall()
 
-        event_time = datetime.datetime.fromisoformat(time_str)
+    for r in rows:
 
-        diff = (event_time - now).total_seconds()
+        sid, uid, t, text, rep = r
 
-        if 0 < diff < 600:
+        dt = datetime.datetime.fromisoformat(t)
 
-            push_line(user_id, f"提醒：{title} 即將開始")
+        dt = tz.localize(dt)
+
+        key = f"{sid}-{dt}"
+
+        if abs((dt - now).total_seconds()) < 60:
+
+            if key not in notified:
+
+                push_message(uid, f"⏰ 行程提醒\n{text}")
+
+                notified.add(key)
+
+        # 重複行程
+        if rep == "daily":
+
+            while dt < now:
+                dt += datetime.timedelta(days=1)
+
+        if rep == "weekly":
+
+            while dt < now:
+                dt += datetime.timedelta(days=7)
+
 
 
 # ==========================================
-# LINE 主動推播
+# 今日行程文字
 # ==========================================
 
-def push_line(user_id, text):
+def format_today_schedule(user_id):
 
-    requests.post(
-        "https://api.line.me/v2/bot/message/push",
-        headers={
-            "Authorization": f"Bearer {LINE_TOKEN}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "to": user_id,
-            "messages": [
-                {
-                    "type": "text",
-                    "text": text
-                }
-            ]
+    events = get_today_events(user_id)
+
+    if not events:
+        return "今天沒有行程"
+
+    return "\n".join(events)
+
+
+
+# ==========================================
+# 新聞
+# ==========================================
+
+def get_news():
+
+    raw = web_search("台灣新聞")
+
+    news = call_ai([
+        {
+            "role": "user",
+            "content": f"整理3條重要新聞:\n{raw}"
         }
-    )
+    ])
+
+    return news
+
 
 
 # ==========================================
-# AI 早報
+# 早報
 # ==========================================
 
 def morning_report():
 
-    conn = get_conn()
+    print("執行早報")
 
-    cursor = conn.cursor()
+    users = cursor.execute(
+        "SELECT DISTINCT user_id FROM schedule"
+    ).fetchall()
 
-    cursor.execute(
-        "SELECT DISTINCT user_id FROM memory"
-    )
+    news = get_news()
 
-    users = cursor.fetchall()
+    for (uid,) in users:
 
-    conn.close()
+        schedule_text = format_today_schedule(uid)
 
-    for u in users:
+        msg = f"""
+🌅 早安
 
-        user_id = u[0]
+📅 今日行程
+{schedule_text}
 
-        schedule = get_today_events(user_id)
-
-        life = daily_life_analysis(user_id)
-
-        prompt = f"""
-現在時間：
-{now_str()}
-
-今日行程：
-{schedule}
-
-生活分析：
-{life}
-
-請生成一份 AI 早報：
-
-1 今日重點
-2 行程提醒
-3 建議
+📰 今日新聞
+{news}
 """
 
-        report = call_ai([
-            {"role": "user", "content": prompt}
-        ])
+        push_message(uid, msg)
 
-        push_line(user_id, "🌅 AI早報\n\n" + report)
 
 
 # ==========================================
-# 排程系統
-# ==========================================
-
-def run_schedule():
-
-    schedule.every().day.at("05:00").do(morning_report)
-
-    schedule.every(1).minutes.do(event_reminder)
-
-    schedule.every().day.at("00:00").do(reset_usage)
-
-    while True:
-
-        schedule.run_pending()
-
-        time.sleep(1)
-
-
-# ==========================================
-# 啟動排程
-# ==========================================
-
-threading.Thread(target=run_schedule).start()
-# ==========================================
-# 每週報告
+# 週報
 # ==========================================
 
 def weekly_report():
 
-    conn = get_conn()
-    cursor = conn.cursor()
+    print("執行週報")
 
-    cursor.execute(
-        "SELECT DISTINCT user_id FROM memory"
-    )
+    users = cursor.execute(
+        "SELECT DISTINCT user_id FROM schedule"
+    ).fetchall()
 
-    users = cursor.fetchall()
+    for (uid,) in users:
 
-    for u in users:
+        rows = cursor.execute(
+            "SELECT text,time FROM schedule WHERE user_id=?",
+            (uid,)
+        ).fetchall()
 
-        user_id = u[0]
-
-        cursor.execute(
-            """
-            SELECT role,content
-            FROM memory
-            WHERE user_id=?
-            ORDER BY id DESC
-            LIMIT 100
-            """,
-            (user_id,)
-        )
-
-        rows = cursor.fetchall()
-
-        text = "\n".join([r[1] for r in rows])
-
-        prompt = f"""
-請分析這個人的一週生活：
-
-{text}
-
-輸出：
-
-1 本週重點
-2 進步的地方
-3 需要改善
-4 下週建議
-"""
-
-        report = call_ai([
-            {"role": "user", "content": prompt}
+        analysis = call_ai([
+            {
+                "role": "user",
+                "content": f"分析使用者本週行程\n{rows}"
+            }
         ])
 
-        push_line(user_id, "📊 每週AI報告\n\n" + report)
-
-    conn.close()
-
+        push_message(uid, f"📊 本週分析\n{analysis}")
 
 # ==========================================
-# 財務紀錄
+# 記帳系統
 # ==========================================
 
-def add_expense(user_id, text):
+def add_expense(user_id, amount, category, note):
 
-    try:
+    now = datetime.datetime.now(tz)
 
-        parts = text.split()
-
-        amount = int(parts[1])
-
-        note = " ".join(parts[2:]) if len(parts) > 2 else ""
-
-        conn = get_conn()
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            INSERT INTO finance(user_id,amount,note,time)
-            VALUES(?,?,?,?)
-            """,
-            (
-                user_id,
-                amount,
-                note,
-                now_str()
-            )
+    cursor.execute(
+        "INSERT INTO expenses VALUES (?,?,?,?,?)",
+        (
+            user_id,
+            amount,
+            category,
+            note,
+            now.isoformat()
         )
+    )
 
-        conn.commit()
-        conn.close()
+    conn.commit()
 
-        return "已記錄支出"
+    return f"已記帳 {amount} 元"
 
-    except:
 
-        return "格式錯誤\n/花費 100 午餐"
+# ==========================================
+# 自動分類
+# ==========================================
+
+def detect_category(text):
+
+    food_words = ["吃", "餐", "午餐", "晚餐", "早餐", "咖啡"]
+
+    transport_words = ["車", "捷運", "公車", "計程車"]
+
+    shopping_words = ["買", "購物"]
+
+    if any(w in text for w in food_words):
+        return "餐飲"
+
+    if any(w in text for w in transport_words):
+        return "交通"
+
+    if any(w in text for w in shopping_words):
+        return "購物"
+
+    return "其他"
+
+
+# ==========================================
+# 取得本週花費
+# ==========================================
+
+def get_week_expense(user_id):
+
+    now = datetime.datetime.now(tz)
+
+    week_ago = now - datetime.timedelta(days=7)
+
+    rows = cursor.execute(
+        """
+        SELECT amount,category,note,time
+        FROM expenses
+        WHERE user_id=? AND time>?
+        """,
+        (
+            user_id,
+            week_ago.isoformat()
+        )
+    ).fetchall()
+
+    return rows
+
+
+# ==========================================
+# 取得本月花費
+# ==========================================
+
+def get_month_expense(user_id):
+
+    now = datetime.datetime.now(tz)
+
+    month_ago = now - datetime.timedelta(days=30)
+
+    rows = cursor.execute(
+        """
+        SELECT amount,category,note,time
+        FROM expenses
+        WHERE user_id=? AND time>?
+        """,
+        (
+            user_id,
+            month_ago.isoformat()
+        )
+    ).fetchall()
+
+    return rows
 
 
 # ==========================================
@@ -1517,529 +663,779 @@ def add_expense(user_id, text):
 
 def finance_analysis(user_id):
 
-    conn = get_conn()
-    cursor = conn.cursor()
+    rows = get_month_expense(user_id)
 
-    cursor.execute(
-        """
-        SELECT amount,note,time
-        FROM finance
-        WHERE user_id=?
-        ORDER BY id DESC
-        LIMIT 50
-        """,
-        (user_id,)
-    )
+    if not rows:
+        return "目前沒有記帳資料"
 
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    text = "\n".join([str(r) for r in rows])
-
-    prompt = f"""
-分析這些花費：
-
-{text}
-
-請輸出：
-
-1 花費習慣
-2 最大支出
-3 改善建議
-"""
+    text = str(rows)
 
     result = call_ai([
-        {"role": "user", "content": prompt}
+        {
+            "role": "system",
+            "content": "你是理財顧問"
+        },
+        {
+            "role": "user",
+            "content": f"""
+分析使用者花費並給建議
+
+資料:
+{text}
+
+輸出:
+1 花費趨勢
+2 最大支出
+3 建議
+"""
+        }
     ])
 
     return result
 
 
 # ==========================================
-# 習慣分析
+# 支出統計
 # ==========================================
 
-def habit_learning(user_id):
+def expense_summary(user_id):
 
-    conn = get_conn()
-    cursor = conn.cursor()
+    rows = get_month_expense(user_id)
 
-    cursor.execute(
-        """
-        SELECT content
-        FROM memory
-        WHERE user_id=? AND role='user'
-        ORDER BY id DESC
-        LIMIT 100
-        """,
-        (user_id,)
-    )
+    if not rows:
+        return "沒有資料"
 
-    rows = cursor.fetchall()
+    total = 0
 
-    conn.close()
+    categories = {}
 
-    text = "\n".join([r[0] for r in rows])
+    for amount, cat, note, t in rows:
 
-    prompt = f"""
-從以下對話分析這個人的習慣：
+        total += amount
 
-{text}
+        if cat not in categories:
+            categories[cat] = 0
 
-輸出：
+        categories[cat] += amount
 
-1 作息
-2 常見目標
-3 興趣
-4 生活模式
+    text = f"本月總花費 {total} 元\n"
+
+    for k,v in categories.items():
+        text += f"{k}: {v}\n"
+
+    return text
+
+
+# ==========================================
+# 週財務報告
+# ==========================================
+
+def weekly_finance_report():
+
+    print("執行財務週報")
+
+    users = cursor.execute(
+        "SELECT DISTINCT user_id FROM expenses"
+    ).fetchall()
+
+    for (uid,) in users:
+
+        rows = get_week_expense(uid)
+
+        if not rows:
+            continue
+
+        analysis = call_ai([
+            {
+                "role": "user",
+                "content": f"""
+分析本週花費
+
+{rows}
+"""
+            }
+        ])
+
+        msg = f"""
+💰 本週財務報告
+
+{analysis}
 """
 
-    habits = call_ai([
-        {"role": "user", "content": prompt}
-    ])
+        push_message(uid, msg)
 
-    conn = get_conn()
-    cursor = conn.cursor()
+
+# ==========================================
+# 記帳文字解析
+# ==========================================
+
+def parse_expense(text):
+
+    m = re.search(r"(\d+)", text)
+
+    if not m:
+        return None
+
+    amount = int(m.group(1))
+
+    category = detect_category(text)
+
+    note = text
+
+    return amount, category, note
+
+
+# ==========================================
+# 記帳指令
+# ==========================================
+
+def handle_expense_command(user_id, text):
+
+    parsed = parse_expense(text)
+
+    if not parsed:
+        return "記帳格式錯誤"
+
+    amount, cat, note = parsed
+
+    return add_expense(user_id, amount, cat, note)
+
+# ==========================================
+# AI 使用者人格系統
+# ==========================================
+
+def get_profile(user_id):
+
+    row = cursor.execute(
+        "SELECT summary FROM profile WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+    if row:
+        return row[0]
+
+    return ""
+
+
+def update_profile(user_id, text):
+
+    old = get_profile(user_id)
+
+    try:
+
+        summary = call_ai([
+            {
+                "role": "system",
+                "content": "整理使用者的長期特徵，例如興趣、習慣、目標"
+            },
+            {
+                "role": "user",
+                "content": f"""
+舊資料:
+{old}
+
+新訊息:
+{text}
+
+請整理新的使用者特徵
+"""
+            }
+        ])
+
+        cursor.execute(
+            "REPLACE INTO profile VALUES (?,?)",
+            (
+                user_id,
+                summary
+            )
+        )
+
+        conn.commit()
+
+    except Exception as e:
+
+        print("更新profile錯誤", e)
+
+
+# ==========================================
+# 習慣記錄
+# ==========================================
+
+def add_habit(user_id, habit):
 
     cursor.execute(
-        """
-        REPLACE INTO profile VALUES (?,?)
-        """,
-        (user_id, habits)
+        "INSERT INTO habits VALUES (?,?)",
+        (
+            user_id,
+            habit
+        )
     )
 
     conn.commit()
-    conn.close()
+
+    return f"已記住習慣：{habit}"
+
+
+def get_habits(user_id):
+
+    rows = cursor.execute(
+        "SELECT habit FROM habits WHERE user_id=?",
+        (user_id,)
+    ).fetchall()
+
+    return [r[0] for r in rows]
 
 
 # ==========================================
-# AI 週計畫生成
+# 習慣分析
 # ==========================================
 
-def generate_week_plan(user_id):
+def habit_analysis(user_id):
 
-    profile = get_profile(user_id)
+    habits = get_habits(user_id)
 
-    schedule_data = get_all_schedule(user_id)
+    if not habits:
+        return "目前沒有習慣資料"
 
-    prompt = f"""
-使用者資料：
+    result = call_ai([
+        {
+            "role": "system",
+            "content": "你是一個生活教練"
+        },
+        {
+            "role": "user",
+            "content": f"""
+使用者習慣:
 
-{profile}
+{habits}
 
-目前行程：
-
-{schedule_data}
-
-請生成一份週計畫：
-
-1 健康
-2 學習
-3 工作
-4 休息
+請分析生活模式並給建議
 """
-
-    plan = call_ai([
-        {"role": "user", "content": prompt}
+        }
     ])
 
-    return plan
+    return result
 
 
 # ==========================================
-# AI 人格
+# 自動學習習慣
 # ==========================================
 
-AI_PERSONA = """
-你是一個個人AI助理。
+def detect_habit(text):
 
-角色：
+    keywords = [
+        "每天",
+        "習慣",
+        "我都會",
+        "常常"
+    ]
 
-1 行程管理
-2 生活教練
-3 學習助手
-4 理財顧問
+    for k in keywords:
+        if k in text:
+            return True
 
-風格：
+    return False
 
-- 簡潔
-- 有條理
-- 提供建議
+
+def learn_habit(user_id, text):
+
+    if detect_habit(text):
+
+        add_habit(user_id, text)
+
+
+# ==========================================
+# 行為分析
+# ==========================================
+
+def behavior_analysis(user_id):
+
+    messages = cursor.execute(
+        """
+        SELECT content
+        FROM memory
+        WHERE user_id=?
+        ORDER BY rowid DESC
+        LIMIT 50
+        """,
+        (user_id,)
+    ).fetchall()
+
+    if not messages:
+        return "沒有資料"
+
+    text = str(messages)
+
+    result = call_ai([
+        {
+            "role": "system",
+            "content": "你是生活分析師"
+        },
+        {
+            "role": "user",
+            "content": f"""
+分析使用者最近行為
+
+{text}
+
+輸出:
+1 生活模式
+2 壓力狀態
+3 建議
 """
+        }
+    ])
+
+    return result
 
 
 # ==========================================
-# AI 對話封裝
+# 目標追蹤
 # ==========================================
 
-def ai_chat(user_id, user_msg):
+def add_goal(user_id, goal):
+
+    cursor.execute(
+        "INSERT INTO goals VALUES (?,?)",
+        (
+            user_id,
+            goal
+        )
+    )
+
+    conn.commit()
+
+    return f"目標已設定：{goal}"
+
+
+def get_goals(user_id):
+
+    rows = cursor.execute(
+        "SELECT goal FROM goals WHERE user_id=?",
+        (user_id,)
+    ).fetchall()
+
+    return [r[0] for r in rows]
+
+
+# ==========================================
+# 目標分析
+# ==========================================
+
+def goal_analysis(user_id):
+
+    goals = get_goals(user_id)
+
+    if not goals:
+        return "目前沒有設定目標"
+
+    result = call_ai([
+        {
+            "role": "system",
+            "content": "你是目標管理教練"
+        },
+        {
+            "role": "user",
+            "content": f"""
+使用者目標:
+
+{goals}
+
+請給達成建議
+"""
+        }
+    ])
+
+    return result
+
+
+# ==========================================
+# 智慧 AI 回覆
+# ==========================================
+
+def smart_chat(user_id, text):
 
     profile = get_profile(user_id)
+
+    habits = get_habits(user_id)
+
+    now = datetime.datetime.now(tz)
 
     messages = [
 
         {
             "role": "system",
-            "content": AI_PERSONA
-        },
+            "content": f"""
+你是使用者的私人AI助理
 
-        {
-            "role": "system",
-            "content": f"使用者資料：{profile}"
-        },
+使用者資料:
+{profile}
 
-        {
-            "role": "system",
-            "content": f"現在時間：{now_str()}"
+使用者習慣:
+{habits}
+
+現在時間:
+{now}
+
+請以助理方式回答
+"""
         },
 
         {
             "role": "user",
-            "content": user_msg
+            "content": text
         }
+
     ]
 
-    return call_ai(messages)
+    reply = call_ai(messages)
 
+    update_profile(user_id, text)
 
-# ==========================================
-# 指令系統
-# ==========================================
+    learn_habit(user_id, text)
 
-def command_router(user_id, text):
+    return reply
 
-    if text.startswith("/花費"):
+# ============================
+# Reminder System
+# ============================
 
-        return add_expense(user_id, text)
+def add_reminder(user_id, text, remind_time):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
 
-    if text == "/財務":
+    c.execute("""
+        INSERT INTO reminders (user_id, text, remind_time)
+        VALUES (?, ?, ?)
+    """, (user_id, text, remind_time))
 
-        return finance_analysis(user_id)
+    conn.commit()
+    conn.close()
 
-    if text == "/週計畫":
+def get_due_reminders():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
 
-        return generate_week_plan(user_id)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    if text == "/週報":
+    c.execute("""
+        SELECT id, user_id, text
+        FROM reminders
+        WHERE remind_time <= ?
+    """, (now,))
 
-        weekly_report()
+    rows = c.fetchall()
+    conn.close()
 
-        return "已生成週報"
+    return rows
 
-    return None
+def delete_reminder(reminder_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
 
+    c.execute("DELETE FROM reminders WHERE id=?", (reminder_id,))
+    conn.commit()
+    conn.close()
 
-# ==========================================
-# 每週排程
-# ==========================================
+# ============================
+# Reminder Background Worker
+# ============================
 
-def schedule_weekly_tasks():
+def reminder_worker():
+    while True:
 
-    schedule.every().sunday.at("21:00").do(weekly_report)
+        reminders = get_due_reminders()
+
+        for rid, user_id, text in reminders:
+
+            try:
+                line_bot_api.push_message(
+                    user_id,
+                    TextSendMessage(
+                        text=f"⏰ 提醒事項\n\n{text}"
+                    )
+                )
+
+                delete_reminder(rid)
+
+            except Exception as e:
+                print("Reminder error:", e)
+
+        time.sleep(60)
+
+threading.Thread(target=reminder_worker, daemon=True).start()
+
+# ============================
+# Daily Morning Report
+# ============================
+
+def generate_morning_report(user_id):
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT title, time
+        FROM events
+        WHERE user_id=? AND date=?
+        ORDER BY time
+    """, (user_id, today))
+
+    events = c.fetchall()
+    conn.close()
+
+    text = "🌅 早安！今日行程\n\n"
+
+    if not events:
+        text += "今天沒有排程 👍"
+
+    for e in events:
+        text += f"• {e[1]} {e[0]}\n"
+
+    return text
+
+# ============================
+# Morning Push Worker
+# ============================
+
+def morning_worker():
+
+    sent_today = set()
 
     while True:
 
-        schedule.run_pending()
+        now = datetime.now()
 
-        time.sleep(5)
+        if now.hour == 7 and now.minute == 0:
+
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+
+            c.execute("SELECT DISTINCT user_id FROM events")
+            users = c.fetchall()
+
+            conn.close()
+
+            for u in users:
+
+                user_id = u[0]
+
+                if user_id in sent_today:
+                    continue
+
+                report = generate_morning_report(user_id)
+
+                try:
+                    line_bot_api.push_message(
+                        user_id,
+                        TextSendMessage(text=report)
+                    )
+
+                    sent_today.add(user_id)
+
+                except:
+                    pass
+
+        if now.hour == 7 and now.minute == 1:
+            sent_today.clear()
+
+        time.sleep(30)
+
+threading.Thread(target=morning_worker, daemon=True).start()
+
+# ============================
+# Memory System
+# ============================
+
+def save_memory(user_id, text):
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    c.execute("""
+        INSERT INTO memories (user_id, text)
+        VALUES (?,?)
+    """, (user_id, text))
+
+    conn.commit()
+    conn.close()
 
 
-threading.Thread(target=schedule_weekly_tasks).start()
-# ==========================================
-# AI 網路搜尋
-# ==========================================
+def get_memories(user_id):
 
-def ai_search(user_id, query):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
 
-    try:
-
-        data = web_search(query)
-
-        prompt = f"""
-根據以下搜尋結果回答問題：
-
-{data}
-
-問題：
-{query}
-"""
-
-        result = call_ai([
-            {"role": "user", "content": prompt}
-        ])
-
-        return result
-
-    except Exception as e:
-
-        print("搜尋錯誤:", e)
-
-        return "搜尋失敗"
-
-
-# ==========================================
-# Google Calendar (預留)
-# ==========================================
-
-def sync_google_calendar(user_id):
-
-    try:
-
-        # 這裡之後可以接 Google API
-        print("Google Calendar sync placeholder")
-
-    except Exception as e:
-
-        print("Google calendar error:", e)
-
-
-# ==========================================
-# 生活儀表板
-# ==========================================
-
-def life_dashboard(user_id):
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        SELECT text,time
-        FROM schedule
-        WHERE user_id=?
-        ORDER BY time ASC
-        LIMIT 5
-        """,
-        (user_id,)
-    )
-
-    events = cursor.fetchall()
-
-    cursor.execute(
-        """
-        SELECT amount,note
-        FROM finance
+    c.execute("""
+        SELECT text FROM memories
         WHERE user_id=?
         ORDER BY id DESC
-        LIMIT 5
-        """,
-        (user_id,)
-    )
+        LIMIT 10
+    """, (user_id,))
 
-    money = cursor.fetchall()
-
+    rows = c.fetchall()
     conn.close()
 
-    event_text = "\n".join(
-        [f"{e[1]} {e[0]}" for e in events]
-    ) if events else "沒有行程"
+    return [r[0] for r in rows]
 
-    money_text = "\n".join(
-        [f"{m[0]} {m[1]}" for m in money]
-    ) if money else "沒有花費"
+# ============================
+# AI Chat Core
+# ============================
 
-    dashboard = f"""
-📊 生活儀表板
+def ask_ai(user_id, message):
 
-📅 行程
-{event_text}
+    memories = get_memories(user_id)
 
-💰 花費
-{money_text}
+    context = "\n".join(memories)
 
-⏰ 時間
-{now_str()}
+    prompt = f"""
+你是一個智慧生活助理。
+
+使用者過去資訊：
+{context}
+
+使用者訊息：
+{message}
 """
-
-    return dashboard
-
-
-# ==========================================
-# 錯誤保護
-# ==========================================
-
-def safe_ai_call(messages):
 
     try:
 
-        return call_ai(messages)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "你是一個聰明的生活助理"},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        reply = response.choices[0].message.content
+
+        save_memory(user_id, message)
+
+        return reply
 
     except Exception as e:
 
-        print("AI錯誤:", e)
+        print("AI error:", e)
 
-        return "AI暫時無法回覆"
+        return "AI暫時無法回應"
 
+# ============================
+# LINE Message Handler
+# ============================
 
-# ==========================================
-# 使用統計
-# ==========================================
+@handler.add(MessageEvent, message=TextMessage)
+def handle_message(event):
 
-def usage_stats():
+    user_id = event.source.user_id
+    text = event.message.text.strip()
 
-    conn = get_conn()
-    cursor = conn.cursor()
+    # ============================
+    # 查看今日行程
+    # ============================
 
-    cursor.execute(
-        """
-        SELECT COUNT(*)
-        FROM memory
-        """
-    )
+    if text == "今天行程":
 
-    msg_count = cursor.fetchone()[0]
+        today = datetime.now().strftime("%Y-%m-%d")
 
-    cursor.execute(
-        """
-        SELECT COUNT(*)
-        FROM schedule
-        """
-    )
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
 
-    event_count = cursor.fetchone()[0]
+        c.execute("""
+        SELECT title,time
+        FROM events
+        WHERE user_id=? AND date=?
+        ORDER BY time
+        """,(user_id,today))
 
-    cursor.execute(
-        """
-        SELECT COUNT(*)
-        FROM finance
-        """
-    )
+        rows = c.fetchall()
+        conn.close()
 
-    money_count = cursor.fetchone()[0]
+        if not rows:
+            reply = "今天沒有行程 👍"
 
-    conn.close()
+        else:
+            reply = "📅 今日行程\n\n"
+            for r in rows:
+                reply += f"{r[1]} {r[0]}\n"
 
-    return f"""
-📈 系統統計
-
-對話數：
-{msg_count}
-
-行程數：
-{event_count}
-
-花費數：
-{money_count}
-"""
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply)
+        )
+        return
 
 
-# ==========================================
-# AI 自動學習排程
-# ==========================================
+    # ============================
+    # 新增提醒
+    # ============================
 
-def auto_learning():
-
-    conn = get_conn()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        SELECT DISTINCT user_id
-        FROM memory
-        """
-    )
-
-    users = cursor.fetchall()
-
-    conn.close()
-
-    for u in users:
+    if text.startswith("提醒"):
 
         try:
 
-            habit_learning(u[0])
+            parts = text.split(" ",2)
 
-        except Exception as e:
+            remind_time = parts[1]
+            content = parts[2]
 
-            print("習慣學習錯誤:", e)
+            add_reminder(user_id,content,remind_time)
 
+            reply = f"⏰ 提醒已新增\n{remind_time}\n{content}"
 
-# ==========================================
-# 夜間任務
-# ==========================================
+        except:
+            reply = "提醒格式錯誤\n例：提醒 2026-03-27 09:00 開會"
 
-def nightly_tasks():
-
-    auto_learning()
-
-    print("夜間任務完成")
-
-
-# ==========================================
-# 系統排程
-# ==========================================
-
-def start_background_jobs():
-
-    schedule.every().day.at("03:00").do(nightly_tasks)
-
-    schedule.every().day.at("05:00").do(morning_report)
-
-    while True:
-
-        schedule.run_pending()
-
-        time.sleep(5)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply)
+        )
+        return
 
 
-threading.Thread(
-    target=start_background_jobs,
-    daemon=True
-).start()
+    # ============================
+    # AI 對話
+    # ============================
 
+    reply = ask_ai(user_id,text)
 
-# ==========================================
-# 擴充指令
-# ==========================================
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text=reply)
+    )
 
-def extended_commands(user_id, text):
+# ============================
+# Flask Webhook
+# ============================
 
-    if text.startswith("/查"):
+@app.route("/callback", methods=['POST'])
+def callback():
 
-        q = text.replace("/查", "")
+    signature = request.headers['X-Line-Signature']
+    body = request.get_data(as_text=True)
 
-        return ai_search(user_id, q)
+    try:
+        handler.handle(body, signature)
 
-    if text == "/儀表板":
+    except InvalidSignatureError:
+        abort(400)
 
-        return life_dashboard(user_id)
+    return 'OK'
 
-    if text == "/統計":
+# ============================
+# Render Start
+# ============================
 
-        return usage_stats()
+if __name__ == "__main__":
 
-    return None
+    port = int(os.environ.get("PORT", 10000))
 
+    print("AI Assistant started")
 
-# ==========================================
-# AI 回覆包裝
-# ==========================================
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
 
-def generate_ai_reply(user_id, user_msg):
-
-    cmd = command_router(user_id, user_msg)
-
-    if cmd:
-
-        return cmd
-
-    ext = extended_commands(user_id, user_msg)
-
-    if ext:
-
-        return ext
-
-    return ai_chat(user_id, user_msg)
-
-
-# ==========================================
-# 系統啟動訊息
-# ==========================================
-
-print("====================================")
-print(" AI LINE 助理 已啟動 ")
-print(" 時區：Asia/Taipei")
-print(" 每日上限：500")
-print(" 早報：05:00")
-print("====================================")
