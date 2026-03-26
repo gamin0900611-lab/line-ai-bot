@@ -2,7 +2,6 @@
 # LINE AI ASSISTANT SYSTEM
 # Core System
 # ==========================================
-
 from flask import Flask, request
 import requests
 import sqlite3
@@ -18,12 +17,27 @@ import urllib.parse
 
 from openai import OpenAI
 
+# LINE SDK
+from linebot.v3 import WebhookHandler
+from linebot.v3.messaging import MessagingApi, Configuration, ApiClient
+from linebot.v3.webhooks import MessageEvent, TextMessage
+
 
 # ==========================================
 # 基本設定
 # ==========================================
 
 app = Flask(__name__)
+
+
+LINE_CHANNEL_SECRET = os.getenv("3892ffd574c24befd128c97fc20323d4")
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("1O2oOqz3rG5OkdVT2OSSQN3FyJuiFeX53iCp2UB3PbgEO93ZMlNDxRsgmcmraqmbxvj5K/x1w/HTP5a+3bVl0VIJmrKJlp5kIUKl7yylpyXzmiXpnBwumrSwYMOAs75nTY3yny5YkGD5rcmfjZRNaQdB04t89/1O/w1cDnyilFU=")
+
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
+configuration = Configuration(
+    access_token=LINE_CHANNEL_ACCESS_TOKEN
+)
 
 # Render port
 PORT = int(os.environ.get("PORT", 10000))
