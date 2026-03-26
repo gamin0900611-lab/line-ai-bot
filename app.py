@@ -40,9 +40,9 @@ import os
 from openai import OpenAI
 
 client = OpenAI(
-    api_key=os.getenv("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"),
+    api_key="sk-or-v1-390854de32200b8e0960bb1b5887fd8818ecea34002ba5cf0f24a44359fd100"
     base_url="https://openrouter.ai/api/v1"
-)
+))
 # AI模型
 AI_MODEL = "openai/gpt-4o-mini"
 
