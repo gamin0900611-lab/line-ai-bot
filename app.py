@@ -1,22 +1,43 @@
 import os
-from flask import Flask, request
+from flask import Flask, request, abort
+
 from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import MessagingApi, Configuration, ApiClient
-from linebot.v3.webhooks import MessageEvent, TextMessage
+from linebot.v3.webhooks import MessageEvent
+from linebot.v3.webhooks.models import TextMessageContent
+
+from linebot.v3.messaging import (
+    MessagingApi,
+    Configuration,
+    ApiClient,
+    ReplyMessageRequest,
+    TextMessage
+)
 
 app = Flask(__name__)
 
 LINE_CHANNEL_SECRET = os.getenv("3892ffd574c24befd128c97fc20323d4")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("1O2oOqz3rG5OkdVT2OSSQN3FyJuiFeX53iCp2UB3PbgEO93ZMlNDxRsgmcmraqmbxvj5K/x1w/HTP5a+3bVl0VIJmrKJlp5kIUKl7yylpyXzmiXpnBwumrSwYMOAs75nTY3yny5YkGD5rcmfjZRNaQdB04t89/1O/w1cDnyilFU=")
 
-print("SECRET:", LINE_CHANNEL_SECRET)
-print("TOKEN:", LINE_CHANNEL_ACCESS_TOKEN)
-
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 configuration = Configuration(
     access_token=LINE_CHANNEL_ACCESS_TOKEN
 )
+
+@handler.add(MessageEvent, message=TextMessageContent)
+def handle_message(event):
+
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+
+        line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[
+                    TextMessage(text="AI 助理已啟動")
+                ]
+            )
+        )
 
 # OpenRouter AI
 OPENROUTER_API_KEY = os.getenv("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")
@@ -80,7 +101,5 @@ def handle_message(event):
 
 
 if __name__ == "__main__":
-
     port = int(os.environ.get("PORT", 10000))
-
     app.run(host="0.0.0.0", port=port)
