@@ -1,5 +1,8 @@
 flask
-requests
+line-bot-sdk
 openai
+pytz
+requests
+python-dateutil
 schedule
-
+apscheduler
