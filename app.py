@@ -33,7 +33,7 @@ tz = pytz.timezone("Asia/Taipei")
 
 # API KEY
 LINE_TOKEN = os.environ.get("1O2oOqz3rG5OkdVT2OSSQN3FyJuiFeX53iCp2UB3PbgEO93ZMlNDxRsgmcmraqmbxvj5K/x1w/HTP5a+3bVl0VIJmrKJlp5kIUKl7yylpyXzmiXpnBwumrSwYMOAs75nTY3yny5YkGD5rcmfjZRNaQdB04t89/1O/w1cDnyilFU=")
-OPENROUTER_API_KEY = os.environ.get("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")
+OPENROUTER_API_KEY = os.environ.get("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")
 
 # OpenRouter
 client = OpenAI(
