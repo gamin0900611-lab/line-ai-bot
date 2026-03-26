@@ -42,7 +42,7 @@ from openai import OpenAI
 client = OpenAI(
     api_key="sk-or-v1-390854de32200b8e0960bb1b5887fd8818ecea34002ba5cf0f24a44359fd100"
     base_url="https://openrouter.ai/api/v1"
-))
+)
 # AI模型
 AI_MODEL = "openai/gpt-4o-mini"
 
