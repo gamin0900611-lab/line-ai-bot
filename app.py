@@ -39,36 +39,35 @@ configuration = Configuration(
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
-
+             
     user_text = event.message.text
 
     try:
 
-        response = client.chat.completions.create(
+        completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
+                {"role": "system", "content": "你是一個聰明的AI生活助理"},
                 {"role": "user", "content": user_text}
             ]
         )
-
-        reply_text = response.choices[0].message.content
-
+        
+        ai_reply = completion.choices[0].message.content
+        
     except Exception as e:
-  
-        print("AI error:", e)
-        reply_text = "AI 發生錯誤"
-
+                
+        print("AI ERROR:", e)
+        ai_reply = "AI 發生錯誤"
+                 
     with ApiClient(configuration) as api_client:
-
+         
         line_bot_api = MessagingApi(api_client)
 
         line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
-                messages=[
-                    TextMessage(text=reply_text)
-                ]
-            )
+                messages=[TextMessage(text=ai_reply)]
+            )   
         )
 
 # OpenRouter AI
