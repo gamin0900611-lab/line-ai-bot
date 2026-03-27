@@ -40,14 +40,33 @@ configuration = Configuration(
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
 
+    user_text = event.message.text
+
+    try:
+
+        response = client.chat.completions.create(
+            model="openai/gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": user_text}
+            ]
+        )
+
+        reply_text = response.choices[0].message.content
+
+    except Exception as e:
+
+        print("AI error:", e)
+        reply_text = "AI 發生錯誤"
+
     with ApiClient(configuration) as api_client:
+
         line_bot_api = MessagingApi(api_client)
 
         line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
                 messages=[
-                    TextMessage(text="AI 助理已啟動")
+                    TextMessage(text=reply_text)
                 ]
             )
         )
