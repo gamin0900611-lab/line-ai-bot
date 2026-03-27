@@ -18,10 +18,41 @@ from openai import OpenAI
 import sqlite3
 import datetime
 import traceback
+def init_db():
 
+    conn = sqlite3.connect("memory.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS memories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        memory TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+def get_memory(user_id):
+
+    conn = sqlite3.connect("memory.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT memory FROM memories WHERE user_id = ?",
+        (user_id,)
+    )
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    memories = [row[0] for row in rows]
+
+    return memories
 # ===== Flask =====
 app = Flask(__name__)
-
+init_db()
 
 # ===== 讀取環境變數 =====
 CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -65,6 +96,17 @@ CREATE TABLE IF NOT EXISTS memory(
 
 conn.commit()
 
+# ===== 讀取記憶 =====
+def get_memory():
+
+    cursor.execute("SELECT content FROM memory")
+
+    rows = cursor.fetchall()
+
+    memories = [row[0] for row in rows]
+
+    return memories
+
 # ===== 首頁測試 =====
 @app.route("/")
 def home():
@@ -94,6 +136,8 @@ def callback():
 def handle_message(event):
 
     user_message = event.message.text
+    user_id = event.source.user_id
+
     print("User Message:", user_message)
 
     # ===== 記住功能 =====
@@ -156,22 +200,42 @@ def handle_message(event):
     try:
 
         # ===== 呼叫 AI =====
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "你是一個友善的AI助理"},
-                {"role": "user", "content": user_message}
-            ]
-        )
+try:
 
-        ai_reply = response.choices[0].message.content
+    memories = get_memory(user_id)
+    memory_text = "\n".join(memories)
 
-        if not ai_reply:
-            ai_reply = "AI 沒有回應"
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": f"""
+你是一個友善的AI助理。
 
-    except Exception as e:
-        print("AI Error:", e)
-        ai_reply = "AI 發生錯誤，請稍後再試"
+這是使用者的重要記憶：
+{memory_text}
+
+回答時可以參考這些資訊。
+"""
+            },
+            {
+                "role": "user",
+                "content": user_message
+            }
+        ]
+    )
+
+    ai_reply = response.choices[0].message.content
+
+    if not ai_reply:
+        ai_reply = "AI 沒有回應"
+
+except Exception as e:
+    print("AI Error:", e)
+    traceback.print_exc()
+
+    ai_reply = "AI 發生錯誤，請稍後再試"
 
     # ===== 回覆 LINE =====
     try:
@@ -189,7 +253,7 @@ def handle_message(event):
 
     except Exception as e:
         print("LINE Reply Error:", e)
-
+        traceback.print_exc()
 
 # ===== Render 啟動 =====
 if __name__ == "__main__":
