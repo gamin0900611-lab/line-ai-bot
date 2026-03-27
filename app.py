@@ -123,6 +123,36 @@ def handle_message(event):
 
         return
 
+    # ===== 查看記憶 =====
+    if user_message == "我的記憶":
+
+        cursor.execute("SELECT content FROM memory")
+        rows = cursor.fetchall()
+
+        if not rows:
+            reply_text = "我目前沒有記憶"
+
+        else:
+            memory_list = []
+
+            for r in rows:
+                memory_list.append("• " + r[0])
+
+            reply_text = "你的記憶：\n" + "\n".join(memory_list)
+
+        with ApiClient(configuration) as api_client:
+
+            line_bot_api = MessagingApi(api_client)
+
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=reply_text)]
+                )
+            )
+
+        return
+
     try:
 
         # ===== 呼叫 AI =====
