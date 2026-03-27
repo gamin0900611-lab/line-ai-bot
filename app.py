@@ -15,7 +15,9 @@ from linebot.v3.webhooks import (
 )
 
 from openai import OpenAI
-
+import sqlite3
+import datetime
+import traceback
 
 # ===== Flask =====
 app = Flask(__name__)
@@ -49,6 +51,19 @@ client = OpenAI(
     base_url="https://openrouter.ai/api/v1"
 )
 
+# ===== AI 記憶資料庫 =====
+conn = sqlite3.connect("ai_memory.db", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS memory(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content TEXT,
+    created_at TEXT
+)
+""")
+
+conn.commit()
 
 # ===== 首頁測試 =====
 @app.route("/")
