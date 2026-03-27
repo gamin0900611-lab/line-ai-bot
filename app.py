@@ -15,9 +15,10 @@ from linebot.v3.messaging import (
 
 app = Flask(__name__)
 
-LINE_CHANNEL_SECRET = os.getenv("3892ffd574c24befd128c97fc20323d4")
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("1O2oOqz3rG5OkdVT2OSSQN3FyJuiFeX53iCp2UB3PbgEO93ZMlNDxRsgmcmraqmbxvj5K/x1w/HTP5a+3bVl0VIJmrKJlp5kIUKl7yylpyXzmiXpnBwumrSwYMOAs75nTY3yny5YkGD5rcmfjZRNaQdB04t89/1O/w1cDnyilFU=")
+import os
 
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 configuration = Configuration(
