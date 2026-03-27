@@ -54,7 +54,7 @@ def handle_message(event):
         reply_text = response.choices[0].message.content
 
     except Exception as e:
-
+  
         print("AI error:", e)
         reply_text = "AI 發生錯誤"
 
@@ -105,7 +105,7 @@ def handle_message(event):
     try:
 
         completion = client.chat.completions.create(
-            model="openai/gpt-4o-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "你是一個聰明的AI生活助理"},
                 {"role": "user", "content": user_text}
@@ -116,21 +116,19 @@ def handle_message(event):
 
     except Exception as e:
 
+        print("AI ERROR:", e)
         ai_reply = "AI 發生錯誤"
-
-        print(e)
 
     with ApiClient(configuration) as api_client:
 
         line_bot_api = MessagingApi(api_client)
 
-        line_bot_api.reply_message_with_http_info(
+        line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
                 messages=[TextMessage(text=ai_reply)]
             )
         )
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
