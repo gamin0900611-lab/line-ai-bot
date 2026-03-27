@@ -45,7 +45,7 @@ def handle_message(event):
     try:
 
         response = client.chat.completions.create(
-            model="openai/gpt-4o-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "user", "content": user_text}
             ]
@@ -72,6 +72,8 @@ def handle_message(event):
         )
 
 # OpenRouter AI
+from openai import OpenAI
+
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 client = OpenAI(
