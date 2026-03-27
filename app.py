@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, abort
 import os
 import requests
 import sqlite3
@@ -12,6 +12,8 @@ import schedule
 import urllib.parse
 
 from openai import OpenAI
+
+from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import (
     MessagingApi,
     Configuration,
@@ -20,9 +22,10 @@ from linebot.v3.messaging import (
     TextMessage
 )
 
-app = Flask(__name__)
-
-import os
+from linebot.v3.webhooks import (
+    MessageEvent,
+    TextMessageContent
+)
 
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
