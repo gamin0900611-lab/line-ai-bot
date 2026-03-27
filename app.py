@@ -51,7 +51,7 @@ def handle_message(event):
         )
 
 # OpenRouter AI
-OPENROUTER_API_KEY = os.getenv("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")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 client = OpenAI(
     api_key=OPENROUTER_API_KEY,
