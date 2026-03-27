@@ -85,7 +85,7 @@ def handle_message(event):
 
         # ===== 呼叫 AI =====
         response = client.chat.completions.create(
-            model="openai/gpt-4o-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "你是一個友善的AI助理"},
                 {"role": "user", "content": user_message}
