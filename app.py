@@ -96,6 +96,33 @@ def handle_message(event):
     user_message = event.message.text
     print("User Message:", user_message)
 
+    # ===== 記住功能 =====
+    if user_message.startswith("記住"):
+
+        memory_text = user_message.replace("記住", "").strip()
+
+        cursor.execute(
+            "INSERT INTO memory (content, created_at) VALUES (?,?)",
+            (memory_text, str(datetime.datetime.now()))
+        )
+
+        conn.commit()
+
+        reply_text = f"我記住了：{memory_text}"
+
+        with ApiClient(configuration) as api_client:
+
+            line_bot_api = MessagingApi(api_client)
+
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=reply_text)]
+                )
+            )
+
+        return
+
     try:
 
         # ===== 呼叫 AI =====
