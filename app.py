@@ -11,6 +11,8 @@ import re
 import schedule
 import urllib.parse
 
+app = Flask(__name__)
+
 from openai import OpenAI
 
 from linebot.v3 import WebhookHandler
