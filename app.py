@@ -382,8 +382,10 @@ def handle_message(event):
 
 
 # ===== LINE 回覆函數 =====
-
 def reply_line(event, text):
+
+    if not text:
+        text = "已完成操作"
 
     try:
 
@@ -394,7 +396,7 @@ def reply_line(event, text):
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text=text)]
+                    messages=[TextMessage(text=str(text))]
                 )
             )
 
@@ -402,7 +404,6 @@ def reply_line(event, text):
 
         print("LINE Reply Error:", e)
         traceback.print_exc()
-
 
 # ===== Render 啟動 =====
 
