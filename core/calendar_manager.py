@@ -109,6 +109,26 @@ class CalendarManager:
         conn.commit()
         conn.close()
 
+    # ===== 全部行程（提醒用）=====
+
+    def get_all_events_global(self):
+
+        conn = sqlite3.connect(self.db)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT id, user_id, title, event_time
+            FROM events
+            """
+        )
+
+        rows = cursor.fetchall()
+
+        conn.close()
+
+        return rows
+
     # ===== 解析時間（升級版） =====
 
     def parse_time(self, text):

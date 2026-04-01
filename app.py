@@ -3,6 +3,7 @@ import traceback
 from flask import Flask, request, abort
 import datetime
 
+from core.utils.reminder_service import ReminderService
 from memory.memory_manager import MemoryManager
 from core.personality import get_system_prompt
 from core.cost_guard import CostGuard
