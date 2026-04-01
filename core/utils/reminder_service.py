@@ -17,6 +17,9 @@ class ReminderService:
         self.configuration = configuration
         self.running = False
 
+        # 已提醒事件
+        self.reminded_events = set()
+
     def start(self):
 
         print("Reminder service started")
@@ -40,29 +43,39 @@ class ReminderService:
                         "%Y-%m-%d %H:%M"
                     )
 
-                    # 允許1分鐘誤差
-                    if now >= event_dt and now <= event_dt + datetime.timedelta(minutes=1):
+                    # 如果還沒提醒過
+                    if event_id not in self.reminded_events:
 
-                        print(f"提醒 {user_id}: {title}")
+                        # 允許1分鐘誤差
+                        if now >= event_dt and now <= event_dt + datetime.timedelta(minutes=1):
 
-                        # ===== LINE 推播 =====
+                            print(f"提醒 {user_id}: {title}")
 
-                        with ApiClient(self.configuration) as api_client:
+                            try:
 
-                            line_bot_api = MessagingApi(api_client)
+                                with ApiClient(self.configuration) as api_client:
 
-                            line_bot_api.push_message(
-                                PushMessageRequest(
-                                    to=user_id,
-                                    messages=[
-                                        TextMessage(
-                                            text=f"🔔 行程提醒\n{title}"
+                                    line_bot_api = MessagingApi(api_client)
+
+                                    line_bot_api.push_message(
+                                        PushMessageRequest(
+                                            to=user_id,
+                                            messages=[
+                                                TextMessage(
+                                                    text=f"🔔 行程提醒\n{title}"
+                                                )
+                                            ]
                                         )
-                                    ]
-                                )
-                            )
+                                    )
 
-                # 每分鐘檢查
+                                # 標記為已提醒
+                                self.reminded_events.add(event_id)
+
+                            except Exception as e:
+
+                                print("LINE push error:", e)
+
+                # 每分鐘檢查一次
                 time.sleep(60)
 
             except Exception as e:
