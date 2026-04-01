@@ -1,15 +1,17 @@
 import os
 import traceback
-from flask import Flask, request, abort
 import datetime
+import threading
 
-from core.utils.reminder_service import ReminderService
+from flask import Flask, request, abort
+
 from memory.memory_manager import MemoryManager
 from core.personality import get_system_prompt
 from core.cost_guard import CostGuard
-from core.utils.web_search import web_search
-from ai.ai_client import AIClient
 from core.calendar_manager import CalendarManager
+from core.utils.web_search import web_search
+from core.utils.reminder_service import ReminderService
+from ai.ai_client import AIClient
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import (
@@ -23,7 +25,6 @@ from linebot.v3.webhooks import (
     MessageEvent,
     TextMessageContent
 )
-
 # ===== 初始化 =====
 
 app = Flask(__name__)
@@ -32,6 +33,17 @@ ai = AIClient()
 memory_manager = MemoryManager()
 cost_guard = CostGuard()
 calendar_manager = CalendarManager()
+# ===== Reminder service =====
+
+reminder_service = ReminderService(
+    calendar_manager,
+    configuration
+)
+
+threading.Thread(
+    target=reminder_service.start,
+    daemon=True
+).start()
 
 # ===== LINE 環境變數 =====
 
