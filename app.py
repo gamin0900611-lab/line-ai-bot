@@ -1,12 +1,14 @@
 import os
 import traceback
 from flask import Flask, request, abort
+import datetime
 
 from memory.memory_manager import MemoryManager
 from core.personality import get_system_prompt
 from core.cost_guard import CostGuard
 from core.utils.web_search import web_search
 from ai.ai_client import AIClient
+from core.calendar_manager import CalendarManager
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import (
@@ -24,9 +26,11 @@ from linebot.v3.webhooks import (
 # ===== 初始化 =====
 
 app = Flask(__name__)
+
 ai = AIClient()
 memory_manager = MemoryManager()
 cost_guard = CostGuard()
+calendar_manager = CalendarManager()
 
 # ===== LINE 環境變數 =====
 
@@ -41,7 +45,6 @@ if not CHANNEL_ACCESS_TOKEN:
 
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
-
 
 # ===== 健康檢查 =====
 
@@ -88,16 +91,66 @@ def handle_message(event):
         if memory_text:
             memory_manager.save_memory(user_id, memory_text)
 
-        reply_text = f"我記住了：{memory_text}"
+        reply_line(event, f"我記住了：{memory_text}")
+        return
 
-        reply_line(event, reply_text)
+    # ===== 今天行程 =====
+
+    if user_message == "今天行程":
+
+        today = datetime.date.today()
+
+        events = calendar_manager.get_events_by_date(
+            user_id,
+            str(today)
+        )
+
+        if not events:
+            reply_line(event, "今天沒有行程")
+            return
+
+        text = "📅 今天行程\n\n"
+
+        for title, time in events:
+
+            hour = time.split(" ")[1]
+
+            text += f"{hour} {title}\n"
+
+        reply_line(event, text)
+        return
+
+    # ===== 明天行程 =====
+
+    if user_message == "明天行程":
+
+        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+
+        events = calendar_manager.get_events_by_date(
+            user_id,
+            str(tomorrow)
+        )
+
+        if not events:
+            reply_line(event, "明天沒有行程")
+            return
+
+        text = "📅 明天行程\n\n"
+
+        for title, time in events:
+
+            hour = time.split(" ")[1]
+
+            text += f"{hour} {title}\n"
+
+        reply_line(event, text)
         return
 
     # ===== AI 生活分析 =====
+
     if "分析" in user_message:
 
         memories = memory_manager.get_memory(user_id)
-
         memory_text = "\n".join(memories)
 
         analysis_prompt = f"""
@@ -117,14 +170,8 @@ def handle_message(event):
 """
 
         messages = [
-            {
-                "role": "system",
-                "content": "你是一位生活教練 AI"
-            },
-            {
-                "role": "user",
-                "content": analysis_prompt
-            }
+            {"role": "system", "content": "你是一位生活教練 AI"},
+            {"role": "user", "content": analysis_prompt}
         ]
 
         ai_reply = ai.chat(messages)
@@ -153,28 +200,21 @@ def handle_message(event):
         reply_line(event, reply_text)
         return
 
-
     # ===== 呼叫 AI =====
+
     try:
-        
+
         memories = memory_manager.get_memory(user_id)
         memory_text = "\n".join(memories)
-    
+
         system_prompt = get_system_prompt(memory_text)
-        
-        
-        # ===== Web Search 自動觸發 =====
+
+        # ===== Web Search =====
+
         search_keywords = [
-            "新聞",
-            "股價",
-            "多少",
-            "什麼是",
-            "誰是",
-            "查詢",
-            "查一下",
-            "現在",
-            "today",
-            "news"
+            "新聞", "股價", "多少", "什麼是",
+            "誰是", "查詢", "查一下",
+            "現在", "today", "news"
         ]
 
         need_search = any(k in user_message for k in search_keywords)
@@ -195,81 +235,106 @@ def handle_message(event):
 請根據搜尋結果回答。
 """
 
-
         messages = [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_message
-            }
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
         ]
-    
-    
+
         # ===== 成本防爆 =====
+
         if not cost_guard.allow_request(1000):
             reply_line(event, "今日 AI 使用額度已達上限")
             return
 
         ai_reply = ai.chat(messages)
-            
+
         print("AI reply:", ai_reply)
-        
+
         cost_guard.add_usage(1000)
-        
-        
-        # ===== 解析 AI 記憶 =====
+
+        # ===== AI 行程解析 =====
+
+        if "EVENT:" in ai_reply:
+
+            try:
+
+                parts = ai_reply.split("EVENT:")
+                clean_reply = parts[0].strip()
+
+                event_text = parts[1].strip()
+
+                if "|" in event_text:
+
+                    title, time_text = event_text.split("|", 1)
+
+                    event_time = calendar_manager.parse_time(time_text)
+
+                    calendar_manager.add_event(
+                        user_id,
+                        title.strip(),
+                        event_time
+                    )
+
+                ai_reply = clean_reply
+
+            except Exception as e:
+
+                print("Event parse error:", e)
+
+        # ===== AI 記憶解析 =====
+
         if "MEMORY:" in ai_reply:
 
-            parts = ai_reply.split("MEMORY:")
+            try:
 
-            clean_reply = parts[0].strip()
-            memory_text = parts[1].strip()
-        
-            if memory_text:
-                memory_manager.save_memory(user_id, memory_text)
-        
-            ai_reply = clean_reply
+                parts = ai_reply.split("MEMORY:")
+                clean_reply = parts[0].strip()
 
+                memory_text = parts[1].strip()
 
-        if not ai_reply:
-            ai_reply = "AI 沒有回應"
+                if memory_text:
+                    memory_manager.save_memory(user_id, memory_text)
 
+                ai_reply = clean_reply
+
+            except Exception as e:
+
+                print("Memory parse error:", e)
 
     except Exception as e:
-    
+
         print("AI Error:", e)
         traceback.print_exc()
 
-        ai_reply = "AI 發生錯誤，請稍後再試"
-    
-    
+        ai_reply = "AI 發生錯誤"
+
     # ===== 回覆 LINE =====
+
     reply_line(event, ai_reply)
-        
-    
+
+
 # ===== LINE 回覆函數 =====
+
 def reply_line(event, text):
-             
+
     try:
-                
+
         with ApiClient(configuration) as api_client:
-             
+
             line_bot_api = MessagingApi(api_client)
-                
+
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
                     messages=[TextMessage(text=text)]
                 )
             )
-            
+
     except Exception as e:
-        
+
         print("LINE Reply Error:", e)
         traceback.print_exc()
+
 
 # ===== Render 啟動 =====
 
