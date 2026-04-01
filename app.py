@@ -5,14 +5,6 @@ import threading
 
 from flask import Flask, request, abort
 
-from memory.memory_manager import MemoryManager
-from core.personality import get_system_prompt
-from core.cost_guard import CostGuard
-from core.calendar_manager import CalendarManager
-from core.utils.web_search import web_search
-from core.utils.reminder_service import ReminderService
-from ai.ai_client import AIClient
-
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import (
     MessagingApi,
@@ -25,25 +17,15 @@ from linebot.v3.webhooks import (
     MessageEvent,
     TextMessageContent
 )
-# ===== 初始化 =====
 
-app = Flask(__name__)
+from memory.memory_manager import MemoryManager
+from core.personality import get_system_prompt
+from core.cost_guard import CostGuard
+from core.calendar_manager import CalendarManager
+from core.utils.web_search import web_search
+from core.utils.reminder_service import ReminderService
+from ai.ai_client import AIClient
 
-ai = AIClient()
-memory_manager = MemoryManager()
-cost_guard = CostGuard()
-calendar_manager = CalendarManager()
-# ===== Reminder service =====
-
-reminder_service = ReminderService(
-    calendar_manager,
-    configuration
-)
-
-threading.Thread(
-    target=reminder_service.start,
-    daemon=True
-).start()
 
 # ===== LINE 環境變數 =====
 
@@ -56,15 +38,47 @@ if not CHANNEL_SECRET:
 if not CHANNEL_ACCESS_TOKEN:
     raise ValueError("CHANNEL_ACCESS_TOKEN 沒有設定")
 
-configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
+
+# ===== LINE Configuration =====
+
+configuration = Configuration(
+    access_token=CHANNEL_ACCESS_TOKEN
+)
+
 handler = WebhookHandler(CHANNEL_SECRET)
+
+
+# ===== Flask =====
+
+app = Flask(__name__)
+
+
+# ===== 系統初始化 =====
+
+ai = AIClient()
+memory_manager = MemoryManager()
+cost_guard = CostGuard()
+calendar_manager = CalendarManager()
+
+
+# ===== Reminder service =====
+
+reminder_service = ReminderService(
+    calendar_manager,
+    configuration
+)
+
+threading.Thread(
+    target=reminder_service.start,
+    daemon=True
+).start()
+
 
 # ===== 健康檢查 =====
 
 @app.route("/")
 def home():
     return "LINE AI Bot is running"
-
 
 # ===== Webhook =====
 
