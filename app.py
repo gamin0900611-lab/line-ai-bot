@@ -82,6 +82,46 @@ def handle_message(event):
 
     print("User Message:", user_message)
 
+    # ===== 所有行程 =====
+
+    if user_message == "所有行程":
+
+        events = calendar_manager.get_all_events(user_id)
+
+        if not events:
+            reply_line(event, "目前沒有行程")
+            return
+
+        text = "📅 所有行程\n\n"
+
+        for i, (title, time) in enumerate(events, 1):
+            text += f"{i}. {time} {title}\n"
+
+        text += "\n刪除行程請輸入：刪除 1"
+
+        reply_line(event, text)
+        return
+
+
+    # ===== 刪除行程 =====
+
+    if user_message.startswith("刪除"):
+
+        try:
+
+            event_id = int(user_message.replace("刪除", "").strip())
+
+            calendar_manager.delete_event(event_id)
+
+            reply_line(event, "行程已刪除")
+
+        except:
+
+            reply_line(event, "格式：刪除 1")
+
+        return
+
+
     # ===== 手動記住 =====
 
     if user_message.startswith("記住"):
@@ -111,7 +151,7 @@ def handle_message(event):
 
         text = "📅 今天行程\n\n"
 
-        for title, time in events:
+        for eid, title, time in events:
 
             hour = time.split(" ")[1]
 
@@ -119,6 +159,7 @@ def handle_message(event):
 
         reply_line(event, text)
         return
+
 
     # ===== 明天行程 =====
 
@@ -137,7 +178,7 @@ def handle_message(event):
 
         text = "📅 明天行程\n\n"
 
-        for title, time in events:
+        for eid, title, time in events:
 
             hour = time.split(" ")[1]
 

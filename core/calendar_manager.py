@@ -9,8 +9,6 @@ class CalendarManager:
         self.db = "calendar.db"
         self.init_db()
 
-    # ===== 初始化資料庫 =====
-
     def init_db(self):
 
         conn = sqlite3.connect(self.db)
@@ -55,7 +53,7 @@ class CalendarManager:
 
         cursor.execute(
             """
-            SELECT title, event_time
+            SELECT id, title, event_time
             FROM events
             WHERE user_id = ?
             AND event_time BETWEEN ? AND ?
@@ -70,7 +68,7 @@ class CalendarManager:
 
         return rows
 
-    # ===== 取得全部 =====
+    # ===== 所有行程 =====
 
     def get_all_events(self, user_id):
 
@@ -79,7 +77,7 @@ class CalendarManager:
 
         cursor.execute(
             """
-            SELECT title, event_time
+            SELECT id, title, event_time
             FROM events
             WHERE user_id = ?
             ORDER BY event_time
@@ -93,13 +91,26 @@ class CalendarManager:
 
         return rows
 
-    # ===== 解析自然語言時間 =====
+    # ===== 刪除行程 =====
+
+    def delete_event(self, event_id):
+
+        conn = sqlite3.connect(self.db)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "DELETE FROM events WHERE id = ?",
+            (event_id,)
+        )
+
+        conn.commit()
+        conn.close()
+
+    # ===== 解析時間 =====
 
     def parse_time(self, text):
 
         now = datetime.datetime.now()
-
-        # ===== 日期 =====
 
         if "明天" in text:
             date = now + datetime.timedelta(days=1)
@@ -110,8 +121,6 @@ class CalendarManager:
         else:
             date = now
 
-        # ===== 小時 =====
-
         hour = None
 
         for i in range(24):
@@ -120,29 +129,18 @@ class CalendarManager:
                 hour = i
                 break
 
-        if hour is None:
-            hour = now.hour
-
-        # ===== 晚上 / 下午 =====
-
-        if ("晚上" in text or "下午" in text) and hour < 12:
+        if "晚上" in text and hour is not None and hour < 12:
             hour += 12
 
-        # ===== 分鐘 =====
-
-        minute = 0
-
-        if "30分" in text or "半" in text:
-            minute = 30
-
-        # ===== 建立時間 =====
+        if hour is None:
+            hour = now.hour
 
         dt = datetime.datetime(
             date.year,
             date.month,
             date.day,
             hour,
-            minute
+            0
         )
 
         return dt.strftime("%Y-%m-%d %H:%M")
