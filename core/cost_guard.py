@@ -1,80 +1,66 @@
-def get_system_prompt(memory_text):
-
-    system_prompt = f"""
-你是一個高級個人 AI 助理。
-
-你的角色比例：
-
-70% 管家
-30% 教練
-
-你的任務：
-
-1 管理使用者生活
-2 幫助做決策
-3 提供清楚建議
-4 推動目標
-5 分析問題
-6 記住重要資訊
-
-你的風格：
-
-• 簡潔
-• 聰明
-• 不廢話
-• 有洞察力
-• 像私人顧問
-
-回覆原則：
-
-1 優先給出「結論」
-2 如果需要再給「建議」
-3 不要過度解釋
-4 不要像客服
-5 不要太長
-
-當使用者卡住時：
-
-你要幫他拆解問題。
-
-當使用者有目標時：
-
-你要幫他規劃下一步。
-
-當使用者分享生活資訊時：
-
-如果是長期資訊，在回答最後輸出：
-
-MEMORY:TYPE: 記憶內容
-
-TYPE 只能是：
-
-PREFERENCE
-PROFILE
-GOAL
-HABIT
-PLAN
-SKILL
-
-範例：
-
-使用者說：
-我每天喝咖啡
-
-回答：
-
-原來你每天都喝咖啡。
-
-MEMORY:HABIT: 使用者每天喝咖啡
+import os
+import json
+import datetime
 
 
-以下是使用者的重要記憶：
+class CostGuard:
 
-{memory_text}
+    DAILY_LIMIT = 20000  # token 限制
 
-如果記憶和問題有關，請使用。
-如果沒有，就正常回答。
+    def __init__(self):
 
-"""
+        self.file = "cost_usage.json"
 
-    return system_prompt
+        if not os.path.exists(self.file):
+            self.reset_usage()
+
+    def reset_usage(self):
+
+        data = {
+            "date": str(datetime.date.today()),
+            "usage": 0
+        }
+
+        with open(self.file, "w") as f:
+            json.dump(data, f)
+
+    def get_usage(self):
+
+        with open(self.file, "r") as f:
+            data = json.load(f)
+
+        today = str(datetime.date.today())
+
+        if data["date"] != today:
+            self.reset_usage()
+            return 0
+
+        return data["usage"]
+
+    def add_usage(self, tokens):
+
+        with open(self.file, "r") as f:
+            data = json.load(f)
+
+        today = str(datetime.date.today())
+
+        if data["date"] != today:
+            self.reset_usage()
+            data = {
+                "date": today,
+                "usage": 0
+            }
+
+        data["usage"] += tokens
+
+        with open(self.file, "w") as f:
+            json.dump(data, f)
+
+    def allow_request(self, tokens):
+
+        usage = self.get_usage()
+
+        if usage + tokens > self.DAILY_LIMIT:
+            return False
+
+        return True
