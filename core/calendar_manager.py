@@ -9,6 +9,8 @@ class CalendarManager:
         self.db = "calendar.db"
         self.init_db()
 
+    # ===== 初始化資料庫 =====
+
     def init_db(self):
 
         conn = sqlite3.connect(self.db)
@@ -91,42 +93,56 @@ class CalendarManager:
 
         return rows
 
-    # ===== 解析時間 =====
+    # ===== 解析自然語言時間 =====
 
     def parse_time(self, text):
 
         now = datetime.datetime.now()
 
-        if "明天" in text:
+        # ===== 日期 =====
 
+        if "明天" in text:
             date = now + datetime.timedelta(days=1)
 
         elif "今天" in text:
-
             date = now
 
         else:
-
             date = now
+
+        # ===== 小時 =====
 
         hour = None
 
         for i in range(24):
 
-            if f"{i}點" in text or f"{i}點" in text:
-
+            if f"{i}點" in text:
                 hour = i
                 break
 
         if hour is None:
             hour = now.hour
 
+        # ===== 晚上 / 下午 =====
+
+        if ("晚上" in text or "下午" in text) and hour < 12:
+            hour += 12
+
+        # ===== 分鐘 =====
+
+        minute = 0
+
+        if "30分" in text or "半" in text:
+            minute = 30
+
+        # ===== 建立時間 =====
+
         dt = datetime.datetime(
             date.year,
             date.month,
             date.day,
             hour,
-            0
+            minute
         )
 
         return dt.strftime("%Y-%m-%d %H:%M")
