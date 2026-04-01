@@ -1,7 +1,12 @@
 import os
+import traceback
 from flask import Flask, request, abort
 
 from memory.memory_manager import MemoryManager
+from core.personality import get_system_prompt
+from core.cost_guard import CostGuard
+from core.utils.web_search import web_search
+from ai.ai_client import AIClient
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import (
@@ -16,23 +21,15 @@ from linebot.v3.webhooks import (
     TextMessageContent
 )
 
-import traceback
+# ===== 初始化 =====
 
-# AI Client
-from ai.ai_client import AIClient
-
-
-# ===== 初始化 AI =====
-ai = AIClient()
-
-
-# ===== Flask =====
 app = Flask(__name__)
-
+ai = AIClient()
 memory_manager = MemoryManager()
+cost_guard = CostGuard()
 
+# ===== LINE 環境變數 =====
 
-# ===== 讀取環境變數 =====
 CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 
@@ -42,23 +39,23 @@ if not CHANNEL_SECRET:
 if not CHANNEL_ACCESS_TOKEN:
     raise ValueError("CHANNEL_ACCESS_TOKEN 沒有設定")
 
-
-# ===== LINE 設定 =====
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
 
 # ===== 健康檢查 =====
+
 @app.route("/")
 def home():
     return "LINE AI Bot is running"
 
 
 # ===== Webhook =====
+
 @app.route("/callback", methods=['POST'])
 def callback():
 
-    signature = request.headers.get('X-Line-Signature')
+    signature = request.headers.get("X-Line-Signature")
     body = request.get_data(as_text=True)
 
     print("Webhook Body:", body)
@@ -73,6 +70,7 @@ def callback():
 
 
 # ===== 接收 LINE 訊息 =====
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
 
@@ -82,6 +80,7 @@ def handle_message(event):
     print("User Message:", user_message)
 
     # ===== 手動記住 =====
+
     if user_message.startswith("記住"):
 
         memory_text = user_message.replace("記住", "").strip()
@@ -91,20 +90,51 @@ def handle_message(event):
 
         reply_text = f"我記住了：{memory_text}"
 
-        with ApiClient(configuration) as api_client:
-            line_bot_api = MessagingApi(api_client)
+        reply_line(event, reply_text)
+        return
 
-            line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=reply_text)]
-                )
-            )
+    # ===== AI 生活分析 =====
+    if "分析" in user_message:
+
+        memories = memory_manager.get_memory(user_id)
+
+        memory_text = "\n".join(memories)
+
+        analysis_prompt = f"""
+以下是使用者的所有長期記憶：
+
+{memory_text}
+
+請幫使用者做生活分析：
+
+1. 使用者目前的習慣
+2. 使用者的目標
+3. 可能的問題
+4. 可以優化的地方
+5. 三個具體建議
+
+請用簡單清楚的方式回答。
+"""
+
+        messages = [
+            {
+                "role": "system",
+                "content": "你是一位生活教練 AI"
+            },
+            {
+                "role": "user",
+                "content": analysis_prompt
+            }
+        ]
+
+        ai_reply = ai.chat(messages)
+
+        reply_line(event, ai_reply)
 
         return
 
-
     # ===== 查看記憶 =====
+
     if user_message == "我的記憶":
 
         memories = memory_manager.get_memory(user_id)
@@ -120,114 +150,129 @@ def handle_message(event):
 
             reply_text = "你的記憶：\n" + "\n".join(memory_list)
 
-        with ApiClient(configuration) as api_client:
-            line_bot_api = MessagingApi(api_client)
-
-            line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=reply_text)]
-                )
-            )
-
+        reply_line(event, reply_text)
         return
 
 
     # ===== 呼叫 AI =====
     try:
-
+        
         memories = memory_manager.get_memory(user_id)
         memory_text = "\n".join(memories)
+    
+        system_prompt = get_system_prompt(memory_text)
+        
+        
+        # ===== Web Search 自動觸發 =====
+        search_keywords = [
+            "新聞",
+            "股價",
+            "多少",
+            "什麼是",
+            "誰是",
+            "查詢",
+            "查一下",
+            "現在",
+            "today",
+            "news"
+        ]
+
+        need_search = any(k in user_message for k in search_keywords)
+
+        if need_search:
+
+            print("Web search triggered")
+
+            search_result = web_search(user_message)
+
+            user_message = f"""
+使用者問題：
+{user_message}
+
+以下是網路搜尋結果：
+{search_result}
+
+請根據搜尋結果回答。
+"""
+
 
         messages = [
             {
                 "role": "system",
-                "content": f"""
-你是一個友善、可靠、會記住使用者資訊的 AI 助理。
-
-以下是使用者的重要記憶：
-{memory_text}
-
-如果使用者說出「長期資訊」，例如：
-- 喜好
-- 興趣
-- 工作
-- 身分
-- 生活習慣
-- 目標
-
-請在回答最後加上一行：
-
-MEMORY: 要記住的資訊
-
-例如：
-
-使用者說：
-我每天喝咖啡
-
-回答：
-原來你很喜歡咖啡！
-
-MEMORY: 使用者每天喝咖啡
-
-如果沒有需要記憶的資訊，就不要輸出 MEMORY。
-"""
+                "content": system_prompt
             },
             {
                 "role": "user",
                 "content": user_message
             }
         ]
-        ai_reply = ai.chat(messages)
+    
+    
+        # ===== 成本防爆 =====
+        if not cost_guard.allow_request(1000):
+            reply_line(event, "今日 AI 使用額度已達上限")
+            return
 
-        # ===== AI 自動記憶 =====
+        ai_reply = ai.chat(messages)
+            
+        print("AI reply:", ai_reply)
+        
+        cost_guard.add_usage(1000)
+        
+        
+        # ===== 解析 AI 記憶 =====
         if "MEMORY:" in ai_reply:
 
             parts = ai_reply.split("MEMORY:")
 
             clean_reply = parts[0].strip()
-
-            if len(parts) > 1:
-
-                memory_text = parts[1].strip()
-
-                if memory_text:
-                    memory_manager.save_memory(user_id, memory_text)
-                    print("AI Memory Saved:", memory_text)
-
+            memory_text = parts[1].strip()
+        
+            if memory_text:
+                memory_manager.save_memory(user_id, memory_text)
+        
             ai_reply = clean_reply
+
 
         if not ai_reply:
             ai_reply = "AI 沒有回應"
 
-    except Exception as e:
 
+    except Exception as e:
+    
         print("AI Error:", e)
         traceback.print_exc()
 
         ai_reply = "AI 發生錯誤，請稍後再試"
-
+    
+    
     # ===== 回覆 LINE =====
+    reply_line(event, ai_reply)
+        
+    
+# ===== LINE 回覆函數 =====
+def reply_line(event, text):
+             
     try:
-
+                
         with ApiClient(configuration) as api_client:
-
+             
             line_bot_api = MessagingApi(api_client)
-
+                
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text=ai_reply)]
+                    messages=[TextMessage(text=text)]
                 )
             )
-
+            
     except Exception as e:
-
+        
         print("LINE Reply Error:", e)
         traceback.print_exc()
 
-
 # ===== Render 啟動 =====
+
 if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 10000))
