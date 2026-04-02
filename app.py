@@ -60,6 +60,9 @@ memory_manager = MemoryManager()
 cost_guard = CostGuard()
 calendar_manager = CalendarManager()
 
+# 行程 index -> event_id 對應
+user_event_map = {}
+
 
 # ===== Reminder service =====
 
@@ -79,6 +82,7 @@ threading.Thread(
 @app.route("/")
 def home():
     return "LINE AI Bot is running"
+
 
 # ===== Webhook =====
 
@@ -109,6 +113,7 @@ def handle_message(event):
 
     print("User Message:", user_message)
 
+
     # ===== 所有行程 =====
 
     if user_message == "所有行程":
@@ -121,7 +126,14 @@ def handle_message(event):
 
         text = "📅 所有行程\n\n"
 
-        for i, (title, time) in enumerate(events, 1):
+        user_event_map[user_id] = []
+
+        for i, event_item in enumerate(events, 1):
+
+            event_id, title, time = event_item
+
+            user_event_map[user_id].append(event_id)
+
             text += f"{i}. {time} {title}\n"
 
         text += "\n刪除行程請輸入：刪除 1"
@@ -136,14 +148,25 @@ def handle_message(event):
 
         try:
 
-            event_id = int(user_message.replace("刪除", "").strip())
+            index = int(user_message.replace("刪除", "").strip()) - 1
+
+            event_list = user_event_map.get(user_id)
+
+            if not event_list:
+                reply_line(event, "請先輸入：所有行程")
+                return
+
+            if index < 0 or index >= len(event_list):
+                reply_line(event, "沒有這個行程編號")
+                return
+
+            event_id = event_list[index]
 
             calendar_manager.delete_event(event_id)
 
             reply_line(event, "行程已刪除")
 
         except:
-
             reply_line(event, "格式：刪除 1")
 
         return
@@ -161,60 +184,8 @@ def handle_message(event):
         reply_line(event, f"我記住了：{memory_text}")
         return
 
-    # ===== 今天行程 =====
 
-    if user_message == "今天行程":
-
-        today = datetime.date.today()
-
-        events = calendar_manager.get_events_by_date(
-            user_id,
-            str(today)
-        )
-
-        if not events:
-            reply_line(event, "今天沒有行程")
-            return
-
-        text = "📅 今天行程\n\n"
-
-        for eid, title, time in events:
-
-            hour = time.split(" ")[1]
-
-            text += f"{hour} {title}\n"
-
-        reply_line(event, text)
-        return
-
-
-    # ===== 明天行程 =====
-
-    if user_message == "明天行程":
-
-        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
-
-        events = calendar_manager.get_events_by_date(
-            user_id,
-            str(tomorrow)
-        )
-
-        if not events:
-            reply_line(event, "明天沒有行程")
-            return
-
-        text = "📅 明天行程\n\n"
-
-        for eid, title, time in events:
-
-            hour = time.split(" ")[1]
-
-            text += f"{hour} {title}\n"
-
-        reply_line(event, text)
-        return
-
-    # ===== AI 生活分析 =====
+    # ===== 生活分析 =====
 
     if "分析" in user_message:
 
@@ -233,8 +204,6 @@ def handle_message(event):
 3. 可能的問題
 4. 可以優化的地方
 5. 三個具體建議
-
-請用簡單清楚的方式回答。
 """
 
         messages = [
@@ -248,6 +217,7 @@ def handle_message(event):
 
         return
 
+
     # ===== 查看記憶 =====
 
     if user_message == "我的記憶":
@@ -256,8 +226,8 @@ def handle_message(event):
 
         if not memories:
             reply_text = "我目前沒有記憶"
-
         else:
+
             memory_list = []
 
             for m in memories:
@@ -268,7 +238,8 @@ def handle_message(event):
         reply_line(event, reply_text)
         return
 
-    # ===== 呼叫 AI =====
+
+    # ===== AI =====
 
     try:
 
@@ -276,6 +247,7 @@ def handle_message(event):
         memory_text = "\n".join(memories)
 
         system_prompt = get_system_prompt(memory_text)
+
 
         # ===== Web Search =====
 
@@ -303,22 +275,26 @@ def handle_message(event):
 請根據搜尋結果回答。
 """
 
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message}
         ]
 
-        # ===== 成本防爆 =====
+
+        # ===== 成本控制 =====
 
         if not cost_guard.allow_request(1000):
             reply_line(event, "今日 AI 使用額度已達上限")
             return
+
 
         ai_reply = ai.chat(messages)
 
         print("AI reply:", ai_reply)
 
         cost_guard.add_usage(1000)
+
 
         # ===== AI 行程解析 =====
 
@@ -349,6 +325,7 @@ def handle_message(event):
 
                 print("Event parse error:", e)
 
+
         # ===== AI 記憶解析 =====
 
         if "MEMORY:" in ai_reply:
@@ -369,6 +346,7 @@ def handle_message(event):
 
                 print("Memory parse error:", e)
 
+
     except Exception as e:
 
         print("AI Error:", e)
@@ -376,12 +354,14 @@ def handle_message(event):
 
         ai_reply = "AI 發生錯誤"
 
+
     # ===== 回覆 LINE =====
 
     reply_line(event, ai_reply)
 
 
 # ===== LINE 回覆函數 =====
+
 def reply_line(event, text):
 
     if not text:
@@ -404,6 +384,7 @@ def reply_line(event, text):
 
         print("LINE Reply Error:", e)
         traceback.print_exc()
+
 
 # ===== Render 啟動 =====
 
